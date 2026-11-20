@@ -1,0 +1,32 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 40 33% 98%;
+    /* Warm ivory #FDFBF7 */
+    --foreground: 222 47% 11%;
+    /* Deep navy slate-900 */
+    --primary: 222 47% 11%;
+    --primary-foreground: 40 33% 98%;
+    --accent: 43 74% 49%;
+    /* Muted Gold / Amber #D4AF37 */
+    --accent-foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --border: 35 15% 88%;
+  }
+
+  body {
+    background-color: #FDFBF7;
+    color: #0F172A;
+    font-feature-settings: "rlig" 1, "calt" 1;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  img {
+    max-width: 100%;
+    height: auto;
+  }
+}
