@@ -1,6 +1,7 @@
 import React from 'react';
 import type { Metadata } from 'next';
 import './globals.css';
+import { AuthProvider } from '../context/AuthContext';
 
 export const metadata: Metadata = {
   title: 'ENSTEINSTORE | Toko Bahan Jas Hujan & Komponen Pendukung Terpercaya',
@@ -37,7 +38,9 @@ export default function RootLayout({
         />
       </head>
       <body className="min-h-screen bg-[#FDFBF7] text-slate-900 antialiased font-sans">
-        {children}
+        <AuthProvider>
+          {children}
+        </AuthProvider>
       </body>
     </html>
   );

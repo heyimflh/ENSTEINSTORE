@@ -1,10 +1,13 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import Link from 'next/link';
 import { Product, PRODUCTS, FEATURED_PRODUCTS, NEW_PRODUCTS, formatIDR, CartItem } from '../data/products';
 import { ProductDetailModal } from '../components/store/ProductDetailModal';
 import { CartDrawer } from '../components/store/CartDrawer';
+import { useAuth } from '../context/AuthContext';
+import { getCategories, getFeaturedProducts, getProducts } from '../lib/catalog-api';
+import { addToCart as addToCartApi, getCart } from '../lib/cart-api';
 import {
   Search,
   ShoppingCart,
@@ -56,6 +59,8 @@ type ProductItem = Product;
 type CartEntry = CartItem;
 
 export default function HomePage() {
+  const { isLoggedIn, isAdmin, user } = useAuth();
+
   // Navigation & Interactive States
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -79,7 +84,7 @@ export default function HomePage() {
   ]);
 
   // 5 PRD Categories
-  const categories: CategoryItem[] = [
+  const initialCategories: CategoryItem[] = [
     {
       id: 'cat-1',
       slug: 'material-jas-hujan',
@@ -127,9 +132,62 @@ export default function HomePage() {
     },
   ];
 
-  // Featured Products & New Arrivals (Unified from Master Product Catalog)
-  const featuredProducts: Product[] = FEATURED_PRODUCTS;
-  const newProducts: Product[] = NEW_PRODUCTS;
+  const [categories, setCategories] = useState<CategoryItem[]>(initialCategories);
+  const [featuredProducts, setFeaturedProducts] = useState<Product[]>(FEATURED_PRODUCTS);
+  const [newProducts, setNewProducts] = useState<Product[]>(NEW_PRODUCTS);
+
+  useEffect(() => {
+    // 1. Fetch live categories from backend
+    getCategories()
+      .then((backendCats) => {
+        if (backendCats && backendCats.length > 0) {
+          setCategories((prev) =>
+            prev.map((cat) => {
+              const found = backendCats.find(
+                (b) => b.slug === cat.slug || b.name.toLowerCase() === cat.name.toLowerCase()
+              );
+              return found ? { ...cat, count: `${found.productCount} Produk` } : cat;
+            })
+          );
+        }
+      })
+      .catch(() => {});
+
+    // 2. Fetch live featured products from backend
+    getFeaturedProducts()
+      .then((backendProducts) => {
+        if (backendProducts && backendProducts.length > 0) {
+          const mapped: Product[] = backendProducts.map((p) => ({
+            id: p.code || String(p.id),
+            code: p.code,
+            name: p.name,
+            categoryId: String(p.categoryId),
+            category: (p.categoryName as any) || 'Material Jas Hujan',
+            categoryName: p.categoryName,
+            price: p.price,
+            unit: (p.unitSymbol as any) || 'meter',
+            allowDecimal: p.allowDecimal,
+            stock: p.stockOnHand,
+            stockOnHand: p.stockOnHand,
+            reservedQuantity: p.reservedQuantity,
+            minimumStock: p.minimumStock,
+            description: p.description,
+            image: p.image || '/placeholder-product.jpg',
+            imageUrl: p.image || '/placeholder-product.jpg',
+            isActive: p.available,
+            isFeatured: p.isFeatured,
+            isNew: p.isNew,
+            createdAt: p.createdAt,
+            salesCount: p.salesCount,
+          }));
+          const feat = mapped.filter((p) => p.isFeatured);
+          const nw = mapped.filter((p) => p.isNew);
+          if (feat.length > 0) setFeaturedProducts(feat);
+          if (nw.length > 0) setNewProducts(nw);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // Price Formatter (IDR)
   const formatRupiah = formatIDR;
@@ -160,6 +218,16 @@ export default function HomePage() {
       }
       return [...prev, { product, quantity: qty }];
     });
+
+    if (isLoggedIn) {
+      getProducts({ query: product.code, size: 1 })
+        .then((r) => {
+          if (r.content.length > 0) {
+            addToCartApi({ productId: r.content[0].id, quantity: qty }).catch(() => {});
+          }
+        })
+        .catch(() => {});
+    }
 
     setAddedNotification(`"${product.name}" ditambahkan ke keranjang.`);
     setTimeout(() => {
@@ -269,16 +337,12 @@ export default function HomePage() {
               >
                 About Store
               </Link>
-              <a
-                href="#orders"
-                onClick={(e) => {
-                  e.preventDefault();
-                  alert('Pelacakan Pesanan: Masukkan kode transaksi Anda di akun pengguna.');
-                }}
+              <Link
+                href="/orders"
                 className="text-sm font-medium text-zinc-500 hover:text-zinc-900 transition-colors duration-200"
               >
                 My Orders
-              </a>
+              </Link>
             </div>
 
             {/* Right: Actions (Search, Cart, Profile) */}
@@ -312,14 +376,13 @@ export default function HomePage() {
               </button>
 
               {/* Profile / Account Button */}
-              <button
-                type="button"
-                onClick={() => alert('Panel Akun Toko Enstein: Customer & Admin Login')}
+              <Link
+                href={isLoggedIn ? (isAdmin ? '/admin/dashboard' : '/profile') : '/auth'}
                 className="hidden sm:inline-flex items-center gap-2 px-4 py-2 rounded-full border border-zinc-200 hover:border-zinc-900 text-zinc-800 text-xs font-medium transition-all duration-200"
               >
                 <User className="w-3.5 h-3.5" />
-                <span>Account</span>
-              </button>
+                <span>{isLoggedIn ? (user?.name ? user.name.split(' ')[0] : 'Account') : 'Account'}</span>
+              </Link>
 
               {/* Mobile Menu Button */}
               <button
@@ -375,6 +438,20 @@ export default function HomePage() {
             >
               About Toko Enstein
             </a>
+            <Link
+              href="/orders"
+              onClick={() => setMobileMenuOpen(false)}
+              className="block text-base font-medium text-zinc-600 hover:text-zinc-900"
+            >
+              My Orders
+            </Link>
+            <Link
+              href={isLoggedIn ? (isAdmin ? '/admin/dashboard' : '/profile') : '/auth'}
+              onClick={() => setMobileMenuOpen(false)}
+              className="block text-base font-semibold text-zinc-900"
+            >
+              {isLoggedIn ? `Account (${user?.name?.split(' ')[0] || 'User'})` : 'Login / Register'}
+            </Link>
             <div className="pt-4 border-t border-zinc-100">
               <a
                 href="https://wa.me/6283876942484"

@@ -1,0 +1,19 @@
+spring:
+  config:
+    activate:
+      on-profile: test
+  # Unit test profile: no database, no JPA, no Flyway.
+  # Integration tests use 'integration-test' profile which connects to real PostgreSQL.
+  flyway:
+    enabled: false
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
+      - org.springframework.boot.orm.jpa.autoconfigure.HibernateJpaAutoConfiguration
+      - org.springframework.boot.flyway.autoconfigure.FlywayAutoConfiguration
+
+logging:
+  level:
+    com.ensteinstore: INFO
+    org.springframework.security: WARN
+
