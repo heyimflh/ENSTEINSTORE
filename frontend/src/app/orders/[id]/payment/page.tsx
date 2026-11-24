@@ -1,1686 +1,1613 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
+import { useAuth } from '@/context/AuthContext';
+import { getOrderDetail, getPayment, uploadPaymentProof, simulatePayment, getStoreConfig } from '@/lib/orders-api';
+import { ApiException, getToken } from '@/lib/api';
+import type { OrderDetailResponse, PaymentResponse, StoreConfigResponse, BankAccountInfo, EWalletInfo } from '@/types/api';
+import { Navbar } from '@/components/store/Navbar';
+import { Footer } from '@/components/store/Footer';
 import {
   Clock,
-  Lock,
   ShieldCheck,
-  UploadCloud,
   Check,
   CheckCircle2,
   AlertCircle,
   AlertTriangle,
-  X,
   Copy,
   ExternalLink,
   Store,
-  CreditCard,
-  Smartphone,
   Sparkles,
   ArrowRight,
   ArrowLeft,
   Building2,
-  QrCode,
-  Info,
-  ShoppingBag,
-  ShoppingCart,
-  User,
-  Menu,
-  MapPin,
-  Phone,
-  Mail,
-  Search,
-  FileText,
-  RotateCcw,
-  Truck,
-  ChevronDown,
-  ChevronUp,
-  FileCheck,
+  Wallet,
+  Banknote,
+  UploadCloud,
+  ChevronRight,
   RefreshCw,
-  BadgeCheck,
-  Download,
+  Loader2,
+  Lock,
+  MessageCircle,
   CheckCheck,
-  Send,
-  HelpCircle,
+  XCircle,
+  ZoomIn,
+  ZoomOut,
+  X,
+  FileCheck2,
+  Receipt,
 } from 'lucide-react';
 
-// ============================================================================
-// TYPES & ENUMS (PRD & DATA SPECIFICATIONS)
-// ============================================================================
-
-export type PaymentMethodId = 'bank' | 'ewallet' | 'cod';
-
-export type PaymentStatus =
-  | 'PENDING'
-  | 'WAITING_VERIFICATION'
-  | 'PAID'
-  | 'REJECTED'
-  | 'FAILED'
-  | 'EXPIRED';
-
-export interface BankAccountInfo {
-  bankName: string;
-  bankCode: string;
-  accountNumber: string;
-  accountHolder: string;
-  logoText: string;
-  color: string;
-  bgColor: string;
+function formatIDR(n: number | null | undefined): string {
+  const num = typeof n === 'number' && !isNaN(n) ? n : 0;
+  return new Intl.NumberFormat('id-ID', {
+    style: 'currency',
+    currency: 'IDR',
+    minimumFractionDigits: 0,
+  }).format(num);
 }
 
-export interface EWalletInfo {
-  provider: string;
-  tagline: string;
-  accountNumber: string;
-  accountHolder: string;
-  nmid: string;
+function formatDate(iso: string | null | undefined): string {
+  if (!iso) return '-';
+  try {
+    return new Date(iso).toLocaleDateString('id-ID', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return iso;
+  }
 }
 
-export interface OrderItemSummary {
-  id: string;
-  name: string;
-  variant: string;
-  quantity: number;
-  unit: string;
-  unitPrice: number;
-  subtotal: number;
-  imageUrl: string;
+/**
+ * Resolves proof of payment URL:
+ * - If full URL (http/https/blob/data), returns as is.
+ * - If leading slash (/uploads/...), prefixes backend origin.
+ * - If bare filename (c6c9ff8a-...jpeg), maps to backend uploads/payments path.
+ */
+function resolveProofImageUrl(url?: string | null): string {
+  if (!url) return '';
+  if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:') || url.startsWith('blob:')) {
+    return url;
+  }
+  const backendBase = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api').replace(/\/api\/?$/, '');
+  if (url.startsWith('/')) {
+    return `${backendBase}${url}`;
+  }
+  return `${backendBase}/uploads/payments/${url}`;
 }
 
-// ============================================================================
-// CONSTANTS & MOCK DATA (PRD ALIGNED)
-// ============================================================================
-
-const BANK_ACCOUNTS: BankAccountInfo[] = [
+// Fallback bank accounts if store config returns empty
+const DEFAULT_BANKS: BankAccountInfo[] = [
   {
     bankName: 'BCA (Bank Central Asia)',
     bankCode: 'BCA',
     accountNumber: '883019283391',
     accountHolder: 'TOKO ENSTEIN KEBUMEN',
-    logoText: 'BCA',
-    color: 'text-blue-700',
-    bgColor: 'bg-blue-50 border-blue-200',
   },
   {
     bankName: 'Bank Mandiri',
     bankCode: 'MANDIRI',
     accountNumber: '1370029381029',
     accountHolder: 'TOKO ENSTEIN KEBUMEN',
-    logoText: 'MANDIRI',
-    color: 'text-amber-800',
-    bgColor: 'bg-amber-50 border-amber-200',
   },
   {
     bankName: 'BRI (Bank Rakyat Indonesia)',
     bankCode: 'BRI',
     accountNumber: '012301002938501',
     accountHolder: 'TOKO ENSTEIN KEBUMEN',
-    logoText: 'BRI',
-    color: 'text-blue-900',
-    bgColor: 'bg-sky-50 border-sky-200',
   },
 ];
 
-const EWALLET_OPTIONS: EWalletInfo = {
-  provider: 'QRIS & E-Wallet Nasional',
-  tagline: 'Mendukung GoPay, OVO, DANA, ShopeePay, LinkAja & BCA Mobile',
-  accountNumber: '0812-3456-7890',
-  accountHolder: 'TOKO ENSTEIN STORE',
-  nmid: 'ID1020039281920',
-};
-
-const ORDER_ITEMS_MOCK: OrderItemSummary[] = [
+const DEFAULT_EWALLETS: EWalletInfo[] = [
   {
-    id: 'item-1',
-    name: 'Resleting Waterproof 70cm Hitam Heavy-Duty',
-    variant: 'Hitam Matte / Gigi Rapat Seal TPU',
-    quantity: 2,
-    unit: 'pcs',
-    unitPrice: 8500,
-    subtotal: 17000,
-    imageUrl: '/images/DB_GAMBAR_ENSTEINSTORE/Alat/Resleting.jpeg',
+    walletName: 'QRIS & E-Wallet Nasional',
+    walletCode: 'QRIS',
+    accountNumber: '0838-7694-2484',
+    accountHolder: 'TOKO ENSTEIN KEBUMEN',
   },
   {
-    id: 'item-2',
-    name: 'Kain Taslan Milky Balon Waterproof Navy',
-    variant: 'Navy Premium / Coating Balon Anti Rembes',
-    quantity: 3,
-    unit: 'meter',
-    unitPrice: 42500,
-    subtotal: 127500,
-    imageUrl: '/images/DB_GAMBAR_ENSTEINSTORE/Bahan/PVCNavy.jpeg',
+    walletName: 'DANA / GoPay / OVO',
+    walletCode: 'DANA',
+    accountNumber: '0838-7694-2484',
+    accountHolder: 'TOKO ENSTEIN KEBUMEN',
   },
 ];
-
-// Delivery fee and price calculation
-const SUBTOTAL_AMOUNT = 144500;
-const DELIVERY_FEE = 15500;
-const TOTAL_AMOUNT = SUBTOTAL_AMOUNT + DELIVERY_FEE; // Exactly Rp 160.000
-
-// ============================================================================
-// HELPER FUNCTIONS
-// ============================================================================
-
-function formatRupiah(amount: number): string {
-  return new Intl.NumberFormat('id-ID', {
-    style: 'currency',
-    currency: 'IDR',
-    maximumFractionDigits: 0,
-  }).format(amount);
-}
-
-function formatCountdown(totalSeconds: number): string {
-  if (totalSeconds <= 0) return '00:00:00';
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  return [
-    hours.toString().padStart(2, '0'),
-    minutes.toString().padStart(2, '0'),
-    seconds.toString().padStart(2, '0'),
-  ].join(':');
-}
-
-// ============================================================================
-// MAIN PAYMENT PAGE COMPONENT
-// ============================================================================
 
 export default function OrderPaymentPage() {
-  const params = useParams();
   const router = useRouter();
+  const params = useParams();
+  const orderIdOrNumber = (params?.id as string) || '';
 
-  // Extract order ID from params or provide standard default PRD ID
-  const rawId = params?.id;
-  const orderId = useMemo(() => {
-    if (typeof rawId === 'string' && rawId.trim()) return rawId.trim();
-    if (Array.isArray(rawId) && rawId[0]) return rawId[0].trim();
-    return 'EST-20261111-0001';
-  }, [rawId]);
+  const { isLoggedIn, loading: authLoading } = useAuth();
 
-  // --------------------------------------------------------------------------
-  // STATE MANAGEMENT
-  // --------------------------------------------------------------------------
-  // Default selected payment method is 'bank'
-  const [selectedMethod, setSelectedMethod] = useState<PaymentMethodId>('bank');
-  const [selectedBankIndex, setSelectedBankIndex] = useState<number>(0);
-  
-  // Real-time Countdown Timer (PRD 12.5 - Default 24 hours reservation duration)
-  // 23 hours, 59 minutes, 59 seconds = 86399 seconds
-  const [secondsRemaining, setSecondsRemaining] = useState<number>(86399);
-  const [isTimerPaused, setIsTimerPaused] = useState<boolean>(false);
+  // Core Data States
+  const [order, setOrder] = useState<OrderDetailResponse | null>(null);
+  const [payment, setPayment] = useState<PaymentResponse | null>(null);
+  const [storeConfig, setStoreConfig] = useState<StoreConfigResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  // File Upload State (FR-21)
-  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
-  const [uploadPreviewUrl, setUploadPreviewUrl] = useState<string | null>(null);
-  const [isDragging, setIsDragging] = useState<boolean>(false);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // Active payment method selection
+  const [selectedMethod, setSelectedMethod] = useState<'BANK_TRANSFER' | 'E_WALLET' | 'CASH' | 'SIMULATED'>('BANK_TRANSFER');
+  const [selectedBankIdx, setSelectedBankIdx] = useState(0);
+  const [selectedWalletIdx, setSelectedWalletIdx] = useState(0);
 
-  // Processing & Confirmation State
-  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
-  const [paymentStatus, setPaymentStatus] = useState<PaymentStatus>('PENDING');
-  const [modalType, setModalType] = useState<
-    'SUCCESS_PAID' | 'WAITING_VERIFICATION' | null
-  >(null);
-
-  // UI helpers & Feedback
+  // Copy feedback
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [searchNavQuery, setSearchNavQuery] = useState<string>('');
-  const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
 
-  // --------------------------------------------------------------------------
-  // COUNTDOWN TIMER EFFECT (PRD 12.5)
-  // --------------------------------------------------------------------------
-  useEffect(() => {
-    if (isTimerPaused || secondsRemaining <= 0) return;
+  // File upload state
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
-    const interval = setInterval(() => {
-      setSecondsRemaining((prev) => {
-        if (prev <= 1) {
-          clearInterval(interval);
-          setPaymentStatus('EXPIRED');
-          return 0;
+  // Authenticated proof blob URL
+  const [proofBlobUrl, setProofBlobUrl] = useState<string | null>(null);
+
+  // Lightbox Zoom Modal state
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [lightboxSrc, setLightboxSrc] = useState<string>('');
+  const [lightboxZoomLevel, setLightboxZoomLevel] = useState<number>(1);
+
+  // Simulation state
+  const [isSimulating, setIsSimulating] = useState(false);
+  const [simulationResult, setSimulationResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  // Countdown timer state
+  const [timeLeft, setTimeLeft] = useState<{ hours: number; minutes: number; seconds: number; isExpired: boolean }>({
+    hours: 24,
+    minutes: 0,
+    seconds: 0,
+    isExpired: false,
+  });
+
+  // 1. Fetch Order and Payment Data
+  const fetchData = useCallback(async () => {
+    if (!isLoggedIn) {
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const orderRes = await getOrderDetail(orderIdOrNumber);
+      setOrder(orderRes);
+
+      // Fetch payment details
+      if (orderRes.id) {
+        try {
+          const payRes = await getPayment(orderRes.id);
+          setPayment(payRes);
+        } catch {
+          if (orderRes.payment) setPayment(orderRes.payment);
         }
-        return prev - 1;
-      });
-    }, 1000);
+      }
 
-    return () => clearInterval(interval);
-  }, [isTimerPaused, secondsRemaining]);
+      // Fetch dynamic store configuration
+      try {
+        const cfg = await getStoreConfig();
+        setStoreConfig(cfg);
+      } catch {
+        // silent fallback to default store config
+      }
 
-  // Clean up object URL to prevent memory leaks
+      // Pre-select payment method based on order
+      const initialMethod = (orderRes.payment?.paymentMethod || (orderRes as any).paymentMethod) as string;
+      if (initialMethod === 'E_WALLET') setSelectedMethod('E_WALLET');
+      else if (initialMethod === 'CASH') setSelectedMethod('CASH');
+      else if (initialMethod === 'SIMULATED') setSelectedMethod('SIMULATED');
+      else setSelectedMethod('BANK_TRANSFER');
+    } catch (err) {
+      if (err instanceof ApiException) {
+        setError(err.message);
+      } else {
+        setError('Gagal memuat rincian pembayaran. Pesanan mungkin tidak ditemukan.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [isLoggedIn, orderIdOrNumber]);
+
   useEffect(() => {
-    return () => {
-      if (uploadPreviewUrl) {
-        URL.revokeObjectURL(uploadPreviewUrl);
+    if (!authLoading) {
+      fetchData();
+    }
+  }, [authLoading, fetchData]);
+
+  // 2. Countdown Timer Calculation
+  useEffect(() => {
+    if (!order?.paymentDeadline) return;
+
+    const deadlineTime = new Date(order.paymentDeadline).getTime();
+
+    const updateTimer = () => {
+      const now = Date.now();
+      const diff = deadlineTime - now;
+
+      if (diff <= 0 || order.orderStatus === 'CANCELLED' || payment?.status === 'EXPIRED') {
+        setTimeLeft({ hours: 0, minutes: 0, seconds: 0, isExpired: true });
+        return;
+      }
+
+      const hours = Math.floor(diff / (1000 * 60 * 60));
+      const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+      const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+
+      setTimeLeft({ hours, minutes, seconds, isExpired: false });
+    };
+
+    updateTimer();
+    const timerId = setInterval(updateTimer, 1000);
+    return () => clearInterval(timerId);
+  }, [order?.paymentDeadline, order?.orderStatus, payment?.status]);
+
+  // 3. Authenticated Proof Blob Loading Fallback
+  useEffect(() => {
+    let active = true;
+    let objectUrl: string | null = null;
+    const currentProofUrl = payment?.proofOfPaymentUrl;
+
+    if (!currentProofUrl) {
+      setProofBlobUrl(null);
+      return;
+    }
+
+    const loadAuthenticatedImage = async () => {
+      const rawUrl = currentProofUrl;
+      const filename = rawUrl.split('/').pop() || rawUrl;
+      const backendBase = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api').replace(/\/api\/?$/, '');
+
+      const candidates = [
+        resolveProofImageUrl(rawUrl),
+        `${backendBase}/api/payments/proofs/${filename}`,
+        `${backendBase}/uploads/payments/${filename}`,
+        `${backendBase}/uploads/proofs/${filename}`,
+        `${backendBase}/uploads/${filename}`,
+        `/uploads/payments/${filename}`,
+        `/uploads/proofs/${filename}`,
+        `/uploads/${filename}`,
+      ];
+
+      const token = getToken();
+
+      for (const candidate of candidates) {
+        try {
+          const res = await fetch(candidate, {
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+          });
+          if (res.ok) {
+            const blob = await res.blob();
+            if (active && blob.size > 0) {
+              objectUrl = URL.createObjectURL(blob);
+              setProofBlobUrl(objectUrl);
+              return;
+            }
+          }
+        } catch {
+          // continue searching next candidate
+        }
       }
     };
-  }, [uploadPreviewUrl]);
 
-  // Show temporary toast feedback
-  const showToast = (message: string) => {
-    setToastMessage(message);
-    setTimeout(() => {
-      setToastMessage(null);
-    }, 3500);
+    loadAuthenticatedImage();
+
+    return () => {
+      active = false;
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [payment?.proofOfPaymentUrl]);
+
+  // Handle ESC key to close lightbox
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && lightboxOpen) {
+        setLightboxOpen(false);
+        setLightboxZoomLevel(1);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [lightboxOpen]);
+
+  // 4. Handle Clipboard Copy
+  const handleCopy = (text: string, key: string) => {
+    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      navigator.clipboard.writeText(text);
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey(null), 2000);
+    }
   };
 
-  // Copy to clipboard helper
-  const handleCopy = (text: string, label: string, key: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedKey(key);
-    showToast(`${label} berhasil disalin ke clipboard!`);
-    setTimeout(() => {
-      setCopiedKey(null);
-    }, 2500);
-  };
-
-  // --------------------------------------------------------------------------
-  // FILE UPLOAD HANDLERS (FR-21 Manual Upload & 2MB Limit)
-  // --------------------------------------------------------------------------
-  const validateAndSetFile = (file: File) => {
+  // 5. Handle File Selection & Validation
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setUploadError(null);
+    const file = e.target.files?.[0];
+    if (!file) return;
 
-    // Validate MIME types (JPG, PNG, WEBP)
-    const validTypes = ['image/jpeg', 'image/png', 'image/jpg', 'image/webp'];
+    // Validate type
+    const validTypes = ['image/jpeg', 'image/png', 'image/webp'];
     if (!validTypes.includes(file.type)) {
-      setUploadError('Format berkas tidak didukung. Harap unggah foto berekstensi JPG atau PNG.');
-      showToast('Gagal: Format file harus JPG atau PNG');
+      setUploadError('Format berkas harus JPG, PNG, atau WEBP.');
       return;
     }
 
-    // Validate 2MB size limit (2 * 1024 * 1024 bytes)
-    const MAX_SIZE = 2 * 1024 * 1024;
-    if (file.size > MAX_SIZE) {
-      setUploadError('Ukuran berkas melebihi batas 2MB. Silakan kompres atau pilih berkas lain.');
-      showToast('Gagal: Ukuran bukti transfer melebihi batas 2MB');
+    // Validate size (2 MB)
+    if (file.size > 2 * 1024 * 1024) {
+      setUploadError('Ukuran gambar maksimal adalah 2 MB.');
       return;
     }
 
-    // Valid file
-    setUploadedFile(file);
-    const objectUrl = URL.createObjectURL(file);
-    setUploadPreviewUrl(objectUrl);
-    showToast('Bukti transfer berhasil dipilih!');
+    setSelectedFile(file);
+    const url = URL.createObjectURL(file);
+    setPreviewUrl(url);
   };
 
-  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+  // 6. Handle Proof Upload Submission
+  const handleUploadProof = async (e: React.FormEvent) => {
     e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(true);
-  };
+    if (!order?.id || !selectedFile) return;
 
-  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
-  };
-
-  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
-
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      validateAndSetFile(e.dataTransfer.files[0]);
-    }
-  };
-
-  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      validateAndSetFile(e.target.files[0]);
-    }
-  };
-
-  const handleRemoveFile = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (uploadPreviewUrl) {
-      URL.revokeObjectURL(uploadPreviewUrl);
-    }
-    setUploadedFile(null);
-    setUploadPreviewUrl(null);
+    setIsUploading(true);
     setUploadError(null);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
+
+    try {
+      const updatedPayment = await uploadPaymentProof(order.id, selectedFile);
+      setPayment(updatedPayment);
+
+      // Re-fetch order to update orderStatus if changed
+      const updatedOrder = await getOrderDetail(orderIdOrNumber);
+      setOrder(updatedOrder);
+
+      setSelectedFile(null);
+      setPreviewUrl(null);
+    } catch (err) {
+      if (err instanceof ApiException) {
+        setUploadError(err.message);
+      } else {
+        setUploadError('Gagal mengunggah bukti pembayaran. Silakan coba lagi.');
+      }
+    } finally {
+      setIsUploading(false);
     }
-    showToast('Bukti transfer dihapus.');
   };
 
-  // --------------------------------------------------------------------------
-  // SUBMISSION & SIMULATION ACTIONS (FR-21, FR-23, PRD 7.4)
-  // --------------------------------------------------------------------------
+  // 7. Handle Payment Simulation (Demo Mode)
+  const handleSimulate = async (outcome: 'SUCCESS' | 'FAILED') => {
+    if (!order?.id) return;
 
-  // Action for Bank Transfer & E-Wallet: Upload & Confirm (FR-21)
-  const handleSubmitManualProof = (e: React.FormEvent) => {
-    e.preventDefault();
+    setIsSimulating(true);
+    setSimulationResult(null);
 
-    if (!uploadedFile) {
-      setUploadError('Harap lampirkan foto bukti transfer pembayaran sebelum melanjutkan.');
-      showToast('Harap unggah bukti transfer terlebih dahulu');
-      return;
+    try {
+      const updatedPayment = await simulatePayment(order.id, outcome);
+      setPayment(updatedPayment);
+
+      const updatedOrder = await getOrderDetail(orderIdOrNumber);
+      setOrder(updatedOrder);
+
+      if (outcome === 'SUCCESS') {
+        setSimulationResult({
+          success: true,
+          message: 'Simulasi pembayaran berhasil! Pesanan telah diverifikasi lunas.',
+        });
+      } else {
+        setSimulationResult({
+          success: false,
+          message: 'Simulasi kegagalan diproses. Status tetap menunggu pembayaran dan stok tetap direservasi.',
+        });
+      }
+    } catch (err) {
+      if (err instanceof ApiException) {
+        setSimulationResult({ success: false, message: err.message });
+      } else {
+        setSimulationResult({ success: false, message: 'Gagal menjalankan simulasi pembayaran.' });
+      }
+    } finally {
+      setIsSimulating(false);
     }
-
-    setIsSubmitting(true);
-    setTimeout(() => {
-      setIsSubmitting(false);
-      setPaymentStatus('WAITING_VERIFICATION');
-      setModalType('WAITING_VERIFICATION');
-      showToast('Bukti berhasil dikirim! Menunggu verifikasi admin.');
-    }, 1200);
   };
 
-
-
-  // Action for Cash on Pickup confirmation
-  const handleConfirmPickup = () => {
-    setIsSubmitting(true);
-    setTimeout(() => {
-      setIsSubmitting(false);
-      setPaymentStatus('PENDING');
-      setModalType('WAITING_VERIFICATION');
-      showToast('Pesanan pickup dikonfirmasi! Bayar tunai saat pengambilan.');
-    }, 1000);
+  // Open Lightbox Modal
+  const openLightboxModal = (src: string) => {
+    if (!src) return;
+    setLightboxSrc(src);
+    setLightboxZoomLevel(1);
+    setLightboxOpen(true);
   };
 
-  const activeBank = BANK_ACCOUNTS[selectedBankIndex];
+  const closeLightboxModal = () => {
+    setLightboxOpen(false);
+    setLightboxZoomLevel(1);
+  };
 
-  return (
-    <div className="min-h-screen bg-zinc-50 text-zinc-900 flex flex-col font-sans selection:bg-zinc-900 selection:text-white">
-      {/* =================================================================== */}
-      {/* 1. STANDARDIZED GLOBAL NAVBAR (Consistent with All Pages)           */}
-      {/* =================================================================== */}
-      <nav className="sticky top-0 z-40 bg-white/70 backdrop-blur-lg border-b border-zinc-200 transition-all">
-        <div className="max-w-7xl mx-auto px-6 lg:px-8">
-          <div className="flex items-center justify-between h-20">
-            
-            {/* Left: Brand Logo */}
-            <div className="flex items-center gap-3">
-              <Link href="/" className="flex items-center gap-3 group">
-                <div className="w-10 h-10 rounded-full bg-zinc-100 p-1 flex items-center justify-center transition-transform duration-300 group-hover:scale-105 shrink-0">
-                  <img
-                    src="/ensteinlogo.png"
-                    alt="Logo Toko Enstein"
-                    width={36}
-                    height={36}
-                    style={{ width: '36px', height: '36px', objectFit: 'contain' }}
-                    className="w-full h-full object-contain"
-                  />
-                </div>
-                <div className="flex flex-col">
-                  <span className="text-lg font-bold tracking-tight text-zinc-900 uppercase">
-                    ENSTEIN<span className="text-amber-500 font-black">STORE</span>
-                  </span>
-                  <span className="text-[10px] tracking-widest uppercase font-medium text-zinc-400">
-                    Kebumen • Jawa Tengah
-                  </span>
-                </div>
-              </Link>
+  // Derived bank & wallet lists
+  const bankAccounts = useMemo(() => {
+    return storeConfig?.bankAccounts?.length ? storeConfig.bankAccounts : DEFAULT_BANKS;
+  }, [storeConfig?.bankAccounts]);
+
+  const activeBank = bankAccounts[selectedBankIdx] || bankAccounts[0];
+
+  const ewallets = useMemo(() => {
+    return storeConfig?.ewallets?.length ? storeConfig.ewallets : DEFAULT_EWALLETS;
+  }, [storeConfig?.ewallets]);
+
+  const activeWallet = ewallets[selectedWalletIdx] || ewallets[0];
+
+  const currentPaymentStatus = payment?.status || 'PENDING';
+  const isSimulationAllowed = storeConfig?.simulationEnabled !== false;
+
+  // Active Proof Display URL (prefer authenticated blob URL, fallback to resolved direct URL)
+  const activeProofUrl = useMemo(() => {
+    if (proofBlobUrl) return proofBlobUrl;
+    if (payment?.proofOfPaymentUrl) return resolveProofImageUrl(payment.proofOfPaymentUrl);
+    return null;
+  }, [proofBlobUrl, payment?.proofOfPaymentUrl]);
+
+  // Unauthenticated Guard
+  if (!authLoading && !isLoggedIn) {
+    return (
+      <div className="min-h-screen bg-[#FDFBF7] flex flex-col justify-between">
+        <Navbar cartItemCount={0} activeRoute="/orders" />
+        <main className="flex-1 max-w-4xl w-full mx-auto px-4 py-16 flex items-center justify-center">
+          <div className="w-full max-w-lg bg-white rounded-3xl border border-zinc-200/80 p-8 sm:p-10 text-center shadow-xs">
+            <div className="w-16 h-16 rounded-3xl bg-amber-50 border border-amber-200/70 mx-auto flex items-center justify-center mb-5 text-amber-600">
+              <Lock className="w-8 h-8" />
             </div>
+            <h1 className="text-2xl font-bold text-zinc-900 mb-2">Masuk ke Akun Anda</h1>
+            <p className="text-zinc-600 text-sm mb-8 leading-relaxed">
+              Silakan login untuk mengakses halaman instruksi dan konfirmasi pembayaran pesanan ini.
+            </p>
+            <Link
+              href="/auth"
+              className="inline-flex items-center justify-center gap-2 px-8 py-3.5 bg-zinc-900 hover:bg-zinc-800 text-white rounded-full text-xs font-semibold shadow-md transition-all"
+            >
+              <span>Login Sekarang</span>
+              <ArrowRight className="w-4 h-4" />
+            </Link>
+          </div>
+        </main>
+        <Footer />
+      </div>
+    );
+  }
 
-            {/* Center: Navigation Links */}
-            <div className="hidden md:flex items-center space-x-10">
-              <Link
-                href="/"
-                className="text-sm font-medium text-zinc-500 hover:text-zinc-900 transition-colors duration-200"
-              >
-                Home
-              </Link>
-              <Link
-                href="/products"
-                className="text-sm font-medium text-zinc-500 hover:text-zinc-900 transition-colors duration-200"
-              >
-                Catalog
-              </Link>
-              <Link
-                href="/#categories"
-                className="text-sm font-medium text-zinc-500 hover:text-zinc-900 transition-colors duration-200"
-              >
-                Categories
-              </Link>
-              <Link
-                href="/#about"
-                className="text-sm font-medium text-zinc-500 hover:text-zinc-900 transition-colors duration-200"
-              >
-                About Store
-              </Link>
-              <Link
-                href="/orders"
-                className="text-sm font-semibold text-zinc-900 border-b-2 border-zinc-900 pb-0.5 transition-colors duration-200"
-              >
-                My Orders
-              </Link>
+  // Loading State
+  if (loading || authLoading) {
+    return (
+      <div className="min-h-screen bg-[#FDFBF7] flex flex-col justify-between">
+        <Navbar cartItemCount={0} activeRoute="/orders" />
+        <main className="flex-1 max-w-4xl w-full mx-auto px-4 py-20 flex flex-col items-center justify-center text-center">
+          <div className="w-16 h-16 rounded-3xl bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-600 mb-4 animate-pulse">
+            <Loader2 className="w-8 h-8 animate-spin" />
+          </div>
+          <h2 className="text-lg font-bold text-zinc-800">Menyiapkan Instruksi Pembayaran</h2>
+          <p className="text-xs text-zinc-500 mt-1 max-w-sm">
+            Memuat data pesanan, tagihan, dan rekening resmi Toko Enstein...
+          </p>
+        </main>
+        <Footer />
+      </div>
+    );
+  }
+
+  // Error State
+  if (error || !order) {
+    return (
+      <div className="min-h-screen bg-[#FDFBF7] flex flex-col justify-between">
+        <Navbar cartItemCount={0} activeRoute="/orders" />
+        <main className="flex-1 max-w-4xl w-full mx-auto px-4 py-16 flex items-center justify-center">
+          <div className="w-full max-w-lg bg-white rounded-3xl border border-rose-200 p-8 sm:p-10 text-center shadow-xs">
+            <div className="w-16 h-16 rounded-3xl bg-rose-50 border border-rose-200 mx-auto flex items-center justify-center mb-5 text-rose-600">
+              <AlertTriangle className="w-8 h-8" />
             </div>
-
-            {/* Right: Actions (Search, Cart, Profile) */}
-            <div className="flex items-center space-x-4">
-              
-              {/* Search Bar Input */}
-              <div className="relative hidden lg:block">
-                <input
-                  type="text"
-                  placeholder="Search fabric, zipper, snap..."
-                  value={searchNavQuery}
-                  onChange={(e) => setSearchNavQuery(e.target.value)}
-                  className="w-52 pl-9 pr-4 py-2 text-xs bg-zinc-100 hover:bg-zinc-200/60 focus:bg-white border border-transparent focus:border-zinc-300 rounded-full text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:w-64 transition-all duration-300"
-                />
-                <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-3.5 top-3 pointer-events-none" />
-              </div>
-
-              {/* Cart Drawer Trigger / Link */}
-              <Link
-                href="/cart"
-                aria-label="Keranjang Belanja"
-                className="relative p-2.5 rounded-full text-zinc-700 hover:text-zinc-900 hover:bg-zinc-100 transition-colors duration-200"
-              >
-                <ShoppingCart className="w-5 h-5" strokeWidth={1.75} />
-                <span className="absolute top-1 right-1 flex items-center justify-center min-w-4 h-4 px-1 text-[10px] font-bold text-white bg-zinc-900 rounded-full">
-                  2
-                </span>
-              </Link>
-
-              {/* Profile / Account Button */}
-              <Link
-                href="/profile"
-                className="hidden sm:inline-flex items-center gap-2 px-4 py-2 rounded-full border border-zinc-200 hover:border-zinc-900 text-zinc-800 text-xs font-medium transition-all duration-200 cursor-pointer"
-              >
-                <User className="w-3.5 h-3.5" />
-                <span>Account</span>
-              </Link>
-
-              {/* Mobile Menu Button */}
+            <h1 className="text-xl font-bold text-zinc-900 mb-2">Gagal Memuat Pembayaran</h1>
+            <p className="text-zinc-600 text-xs sm:text-sm mb-6 leading-relaxed">
+              {error || 'Data pesanan atau tagihan tidak dapat ditemukan di sistem.'}
+            </p>
+            <div className="flex flex-wrap items-center justify-center gap-3">
               <button
                 type="button"
-                onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-                className="md:hidden p-2 rounded-lg text-zinc-700 hover:text-zinc-900 hover:bg-zinc-100"
-                aria-label="Toggle navigation menu"
+                onClick={fetchData}
+                className="px-6 py-3 bg-zinc-900 hover:bg-zinc-800 text-white rounded-full text-xs font-semibold inline-flex items-center gap-2 cursor-pointer shadow-xs"
               >
-                {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Coba Muat Ulang</span>
+              </button>
+              <Link
+                href="/orders"
+                className="px-6 py-3 border border-zinc-200 hover:bg-zinc-50 text-zinc-700 rounded-full text-xs font-semibold"
+              >
+                Lihat Daftar Pesanan
+              </Link>
+            </div>
+          </div>
+        </main>
+        <Footer />
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-[#FDFBF7] flex flex-col justify-between selection:bg-amber-100 selection:text-amber-900">
+      {/* 1. Global Standardized Navbar */}
+      <Navbar cartItemCount={0} activeRoute="/orders" />
+
+      {/* 2. Main Payment Workspace */}
+      <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-8 pb-16">
+        
+        {/* Breadcrumb & Navigation */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-zinc-200/80">
+          <nav aria-label="Breadcrumb">
+            <ol className="flex items-center gap-2 text-xs text-zinc-500">
+              <li>
+                <Link href="/" className="hover:text-zinc-900 transition-colors">
+                  Beranda
+                </Link>
+              </li>
+              <ChevronRight className="w-3.5 h-3.5 text-zinc-400" />
+              <li>
+                <Link href="/orders" className="hover:text-zinc-900 transition-colors">
+                  Pesanan Saya
+                </Link>
+              </li>
+              <ChevronRight className="w-3.5 h-3.5 text-zinc-400" />
+              <li className="font-semibold text-zinc-900">
+                Instruksi Pembayaran
+              </li>
+            </ol>
+          </nav>
+
+          <Link
+            href={`/orders/${order.orderNumber}`}
+            className="inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-600 hover:text-zinc-900 transition-colors"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+            <span>Lihat Rincian Pesanan #{order.orderNumber}</span>
+          </Link>
+        </div>
+
+        {/* Header Title Row */}
+        <div className="mt-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-mono font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-0.5 rounded-full">
+                #{order.orderNumber}
+              </span>
+              <button
+                type="button"
+                onClick={() => handleCopy(order.orderNumber, 'orderNumber')}
+                className="p-1 text-zinc-400 hover:text-zinc-700 rounded-md transition-colors"
+                title="Salin nomor pesanan"
+              >
+                {copiedKey === 'orderNumber' ? (
+                  <Check className="w-3.5 h-3.5 text-emerald-600" />
+                ) : (
+                  <Copy className="w-3.5 h-3.5" />
+                )}
               </button>
             </div>
+            <h1 className="text-2xl sm:text-3xl font-extrabold text-zinc-900 tracking-tight mt-1.5">
+              Selesaikan Pembayaran
+            </h1>
+            <p className="text-xs sm:text-sm text-zinc-600 mt-0.5">
+              Silakan lakukan pembayaran untuk mengonfirmasi pesanan bahan jas hujan dan komponen konveksi Anda.
+            </p>
           </div>
-        </div>
 
-        {/* Mobile Navigation Drawer */}
-        {mobileMenuOpen && (
-          <div className="md:hidden border-t border-zinc-200 bg-white/95 backdrop-blur-md px-6 py-6 space-y-4">
-            <div className="relative mb-4">
-              <input
-                type="text"
-                placeholder="Search catalog..."
-                value={searchNavQuery}
-                onChange={(e) => setSearchNavQuery(e.target.value)}
-                className="w-full pl-9 pr-4 py-2.5 text-sm bg-zinc-100 rounded-full text-zinc-900 placeholder:text-zinc-400 focus:outline-none"
-              />
-              <Search className="w-4 h-4 text-zinc-400 absolute left-3.5 top-3" />
-            </div>
-            <Link
-              href="/"
-              onClick={() => setMobileMenuOpen(false)}
-              className="block text-base font-medium text-zinc-900"
-            >
-              Home
-            </Link>
-            <Link
-              href="/products"
-              onClick={() => setMobileMenuOpen(false)}
-              className="block text-base font-medium text-zinc-600 hover:text-zinc-900"
-            >
-              Catalog
-            </Link>
-            <Link
-              href="/#categories"
-              onClick={() => setMobileMenuOpen(false)}
-              className="block text-base font-medium text-zinc-600 hover:text-zinc-900"
-            >
-              Categories
-            </Link>
-            <Link
-              href="/#about"
-              onClick={() => setMobileMenuOpen(false)}
-              className="block text-base font-medium text-zinc-600 hover:text-zinc-900"
-            >
-              About Store
-            </Link>
-            <Link
-              href="/orders"
-              onClick={() => setMobileMenuOpen(false)}
-              className="block text-base font-semibold text-zinc-900"
-            >
-              My Orders
-            </Link>
-            <Link
-              href="/cart"
-              onClick={() => setMobileMenuOpen(false)}
-              className="block text-base font-medium text-zinc-600 hover:text-zinc-900"
-            >
-              Shopping Cart (2)
-            </Link>
-            <Link
-              href="/profile"
-              onClick={() => setMobileMenuOpen(false)}
-              className="block text-base font-medium text-zinc-600 hover:text-zinc-900 border-t border-zinc-100 pt-3"
-            >
-              Account Profile
-            </Link>
-          </div>
-        )}
-      </nav>
-
-      {/* =================================================================== */}
-      {/* 2. PAGE HEADER                                                      */}
-      {/* pt-12 pb-8 px-4 md:px-12 xl:px-24 text-center                       */}
-      {/* =================================================================== */}
-      <section className="pt-12 pb-8 px-4 md:px-12 xl:px-24 text-center max-w-4xl mx-auto">
-        {/* Navigation Breadcrumb Back */}
-        <div className="inline-flex items-center gap-2 mb-4 text-xs text-zinc-500">
-          <Link href="/checkout" className="hover:text-zinc-900 flex items-center gap-1 transition-colors">
-            <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Kembali ke Checkout</span>
-          </Link>
-          <span>/</span>
-          <span className="text-zinc-900 font-semibold">Instruksi Pembayaran</span>
-        </div>
-
-        {/* Order ID with Copy Action */}
-        <div className="flex items-center justify-center gap-2 text-zinc-500 font-medium tracking-wide">
-          <span className="font-mono text-sm sm:text-base">Order #{orderId}</span>
-          <button
-            type="button"
-            onClick={() => handleCopy(orderId, 'Nomor Pesanan', 'orderId')}
-            title="Salin Nomor Pesanan"
-            className="p-1 text-zinc-400 hover:text-zinc-800 rounded-md transition-colors cursor-pointer"
-          >
-            {copiedKey === 'orderId' ? (
-              <Check className="w-4 h-4 text-emerald-600" />
-            ) : (
-              <Copy className="w-4 h-4" />
-            )}
-          </button>
-        </div>
-
-        {/* Title */}
-        <h1 className="text-3xl md:text-4xl font-bold text-zinc-900 mt-2 tracking-tight">
-          Pilih Metode Pembayaran
-        </h1>
-
-        <p className="text-sm text-zinc-500 mt-2 max-w-lg mx-auto">
-          Silakan selesaikan pembayaran untuk mengonfirmasi pesanan kain dan aksesoris Anda.
-        </p>
-
-        {/* Timer Badge: PRD 12.5 Countdown Timer */}
-        <div className="mt-4 flex flex-col items-center">
-          <div
-            className={`border rounded-full px-4 py-2 inline-flex items-center gap-2 font-medium shadow-xs transition-colors duration-300 ${
-              secondsRemaining < 3600
-                ? 'bg-red-50 text-red-600 border-red-200 animate-pulse'
-                : 'bg-red-50 text-red-600 border-red-100'
-            }`}
-          >
-            <Clock className="w-4 h-4 shrink-0 text-red-500 animate-spin-slow" />
-            <span className="text-xs sm:text-sm font-semibold tracking-wide">
-              Selesaikan pembayaran dalam{' '}
-              <span className="font-mono font-bold text-red-700 bg-red-100/70 px-1.5 py-0.5 rounded-md">
-                {formatCountdown(secondsRemaining)}
+          {/* Countdown Pill Badge */}
+          {currentPaymentStatus === 'PENDING' && !timeLeft.isExpired && (
+            <div className="inline-flex items-center gap-2 px-4 py-2 bg-rose-50 border border-rose-200/80 rounded-2xl text-xs text-rose-800 shadow-2xs self-start sm:self-auto">
+              <Clock className="w-4 h-4 text-rose-600 animate-pulse" />
+              <span>
+                Selesaikan pembayaran dalam:{' '}
+                <strong className="font-mono text-sm font-bold text-rose-700">
+                  {String(timeLeft.hours).padStart(2, '0')}:{String(timeLeft.minutes).padStart(2, '0')}:
+                  {String(timeLeft.seconds).padStart(2, '0')}
+                </strong>
               </span>
-            </span>
-          </div>
-
-          <p className="text-[11px] text-zinc-400 mt-2 flex items-center gap-1.5">
-            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-            <span>Masa berlaku reservasi stok material pesanan Anda</span>
-          </p>
-        </div>
-      </section>
-
-      {/* =================================================================== */}
-      {/* 3. MAIN LAYOUT (px-4 md:px-12 xl:px-24 pb-24 grid...)               */}
-      {/* =================================================================== */}
-      <main className="max-w-7xl mx-auto w-full px-4 md:px-12 xl:px-24 pb-24">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 lg:gap-16 mt-8 items-start">
-          
-          {/* ================================================================= */}
-          {/* LEFT COLUMN: PAYMENT METHODS (span 7 or 8)                        */}
-          {/* ================================================================= */}
-          <div className="lg:col-span-7 xl:col-span-8 space-y-6">
-            
-            {/* Section Heading */}
-            <div className="flex items-center justify-between pb-2 border-b border-zinc-200">
-              <h2 className="text-lg font-bold text-zinc-900 tracking-tight flex items-center gap-2">
-                <span>Daftar Metode Pembayaran</span>
-                <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-600">
-                  3 Pilihan Metode
-                </span>
-              </h2>
-              <span className="text-xs text-zinc-400 hidden sm:inline">Pilih salah satu metode</span>
             </div>
+          )}
+        </div>
 
-            {/* Vertical List of Selectable Payment Methods (Radio-card style) */}
-            <div className="space-y-4">
-              
-              {/* ------------------------------------------------------------- */}
-              {/* METHOD 1: BANK TRANSFER (MANUAL)                              */}
-              {/* ------------------------------------------------------------- */}
-              <div
-                className={`rounded-2xl border transition-all duration-300 overflow-hidden ${
-                  selectedMethod === 'bank'
-                    ? 'border-zinc-900 bg-white shadow-md ring-1 ring-zinc-900/5'
-                    : 'border-zinc-200 bg-transparent text-zinc-500 hover:border-zinc-400 hover:bg-zinc-50/50'
-                }`}
-              >
-                {/* Clickable Header Card */}
-                <button
-                  type="button"
-                  onClick={() => setSelectedMethod('bank')}
-                  className="w-full p-5 sm:p-6 text-left flex items-start sm:items-center justify-between gap-4 cursor-pointer focus:outline-none"
-                >
-                  <div className="flex items-center gap-4">
-                    {/* Radio Indicator */}
-                    <div
-                      className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors ${
-                        selectedMethod === 'bank'
-                          ? 'border-zinc-900 bg-zinc-900'
-                          : 'border-zinc-300 bg-transparent'
-                      }`}
-                    >
-                      {selectedMethod === 'bank' && (
-                        <div className="w-2 h-2 rounded-full bg-white" />
-                      )}
-                    </div>
+        {/* 3. Main 2-Column Grid */}
+        <div className="mt-8 grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+          
+          {/* Left Column (7 cols): Payment Method & Actions */}
+          <div className="lg:col-span-7 space-y-6">
 
-                    {/* Icon */}
-                    <div
-                      className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 transition-colors ${
-                        selectedMethod === 'bank'
-                          ? 'bg-zinc-900 text-white'
-                          : 'bg-zinc-100 text-zinc-600'
-                      }`}
-                    >
-                      <Building2 className="w-5 h-5" />
-                    </div>
-
-                    {/* Label */}
-                    <div>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-bold text-zinc-900 text-base sm:text-lg">
-                          Transfer Bank Manual
-                        </span>
-                        <span className="text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full">
-                          Verifikasi Manual
-                        </span>
-                      </div>
-                      <p className="text-xs sm:text-sm text-zinc-500 mt-0.5">
-                        Transfer via BCA, Mandiri, atau BRI lalu unggah bukti transfer.
-                      </p>
-                    </div>
+            {/* STATE 1: EXPIRED / CANCELLED */}
+            {timeLeft.isExpired || currentPaymentStatus === 'EXPIRED' || order.orderStatus === 'CANCELLED' ? (
+              <div className="bg-white rounded-3xl border border-zinc-200/80 p-8 sm:p-10 text-center shadow-xs">
+                <div className="w-16 h-16 rounded-3xl bg-zinc-100 flex items-center justify-center text-zinc-400 mx-auto mb-5">
+                  <XCircle className="w-8 h-8 text-rose-500" />
+                </div>
+                <h3 className="text-xl font-bold text-zinc-900 mb-2">Batas Waktu Pembayaran Berakhir</h3>
+                <p className="text-zinc-500 text-sm max-w-md mx-auto mb-6 leading-relaxed">
+                  Pesanan #{order.orderNumber} telah otomatis dibatalkan karena melewati batas waktu 24 jam. Stok bahan yang direservasi telah dikembalikan ke katalog.
+                </p>
+                <div className="flex flex-wrap items-center justify-center gap-3">
+                  <Link
+                    href="/products"
+                    className="px-7 py-3.5 bg-zinc-900 hover:bg-zinc-800 text-white rounded-full text-xs font-semibold shadow-md transition-all"
+                  >
+                    Mulai Belanja Kembali
+                  </Link>
+                  <Link
+                    href="/orders"
+                    className="px-6 py-3.5 border border-zinc-200 hover:bg-zinc-50 text-zinc-700 rounded-full text-xs font-semibold transition-all"
+                  >
+                    Daftar Pesanan Saya
+                  </Link>
+                </div>
+              </div>
+            ) : currentPaymentStatus === 'WAITING_VERIFICATION' ? (
+              /* STATE 2: UPGRADED WAITING VERIFICATION CONFIRMATION (REAL IMAGE - NO SYNTHETIC CARD) */
+              <div className="bg-white rounded-3xl border border-amber-200/90 p-6 sm:p-8 shadow-xs space-y-6">
+                
+                {/* Top Status Banner */}
+                <div className="bg-amber-50/80 border border-amber-200/80 rounded-2xl p-5 flex items-start gap-4">
+                  <div className="w-12 h-12 rounded-2xl bg-amber-100/90 border border-amber-300/80 flex items-center justify-center text-amber-700 shrink-0">
+                    <CheckCheck className="w-6 h-6 stroke-[2.5]" />
                   </div>
+                  <div className="space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[10px] font-bold text-amber-800 uppercase tracking-wider bg-amber-100 px-2.5 py-0.5 rounded-full border border-amber-200">
+                        Menunggu Verifikasi Admin
+                      </span>
+                      <span className="text-xs text-zinc-500">
+                        {formatDate(payment?.submittedAt || order?.orderDate || new Date().toISOString())}
+                      </span>
+                    </div>
+                    <h3 className="text-base sm:text-lg font-extrabold text-zinc-900 tracking-tight">
+                      Bukti Pembayaran Sedang Diverifikasi
+                    </h3>
+                    <p className="text-xs text-zinc-600 leading-relaxed">
+                      Admin Toko Enstein memverifikasi mutasi bank pada jam operasional kerja (Senin–Sabtu, 08.00–17.00 WIB). Pesanan akan otomatis diproses setelah dana tervalidasi.
+                    </p>
+                  </div>
+                </div>
 
-                  {/* Toggle Arrow */}
-                  <div className="text-zinc-400 shrink-0 mt-1 sm:mt-0">
-                    {selectedMethod === 'bank' ? (
-                      <ChevronUp className="w-5 h-5 text-zinc-900" />
-                    ) : (
-                      <ChevronDown className="w-5 h-5" />
+                {/* Transaction Metadata Grid */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-zinc-50/80 rounded-2xl p-4 border border-zinc-200/70 text-xs">
+                  <div className="space-y-1">
+                    <span className="text-[11px] text-zinc-400 font-medium block">Metode Pembayaran</span>
+                    <strong className="text-zinc-900 font-bold block truncate">
+                      {payment?.paymentMethod === 'E_WALLET'
+                        ? 'E-Wallet / QRIS'
+                        : payment?.paymentMethod === 'CASH'
+                        ? 'Tunai di Kasir'
+                        : payment?.paymentMethod === 'SIMULATED'
+                        ? 'Simulasi Sistem'
+                        : 'Transfer Bank Manual'}
+                    </strong>
+                  </div>
+                  <div className="space-y-1">
+                    <span className="text-[11px] text-zinc-400 font-medium block">Status Tagihan</span>
+                    <span className="inline-flex items-center gap-1 font-bold text-amber-700">
+                      <Clock className="w-3.5 h-3.5" />
+                      <span>Sedang Diverifikasi</span>
+                    </span>
+                  </div>
+                  <div className="space-y-1">
+                    <span className="text-[11px] text-zinc-400 font-medium block">Total Ditransfer</span>
+                    <strong className="text-zinc-900 font-extrabold text-sm block">
+                      {formatIDR(order.totalAmount)}
+                    </strong>
+                  </div>
+                </div>
+
+                {/* Real Proof Image Preview Box with Lightbox Zoom (NO SYNTHETIC VOUCHER CARD) */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-bold text-zinc-800 uppercase tracking-wider flex items-center gap-1.5">
+                      <Receipt className="w-3.5 h-3.5 text-zinc-500" />
+                      <span>Tangkapan Layar Bukti Transfer</span>
+                    </p>
+                    {activeProofUrl && (
+                      <button
+                        type="button"
+                        onClick={() => openLightboxModal(activeProofUrl)}
+                        className="text-[11px] font-semibold text-amber-800 hover:text-amber-900 hover:underline flex items-center gap-1 cursor-pointer"
+                      >
+                        <ZoomIn className="w-3.5 h-3.5" />
+                        <span>Perbesar Gambar</span>
+                      </button>
                     )}
                   </div>
-                </button>
 
-                {/* Expanded Accordion Content */}
-                {selectedMethod === 'bank' && (
-                  <div className="px-5 sm:px-6 pb-6 pt-2 border-t border-zinc-100 space-y-6 animate-in fade-in duration-200">
-                    
-                    {/* Bank Selection Tabs */}
-                    <div>
-                      <label className="block text-xs font-semibold text-zinc-700 uppercase tracking-wider mb-2">
-                        Pilih Rekening Tujuan:
-                      </label>
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                        {BANK_ACCOUNTS.map((bank, idx) => (
-                          <button
-                            key={bank.bankCode}
-                            type="button"
-                            onClick={() => setSelectedBankIndex(idx)}
-                            className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
-                              selectedBankIndex === idx
-                                ? 'border-zinc-900 bg-zinc-900 text-white shadow-xs'
-                                : 'border-zinc-200 bg-zinc-50 hover:bg-zinc-100 text-zinc-700'
-                            }`}
-                          >
-                            <span className="text-xs font-black tracking-wider uppercase">
-                              {bank.logoText}
-                            </span>
-                            <span className="text-[11px] font-mono mt-1 opacity-90 truncate">
-                              {bank.accountNumber}
-                            </span>
-                          </button>
-                        ))}
+                  {!activeProofUrl ? (
+                    <div className="bg-zinc-50 border border-zinc-200 rounded-2xl p-6 text-center text-zinc-500 text-xs">
+                      <p>Belum ada berkas bukti transfer yang tersimpan.</p>
+                    </div>
+                  ) : (
+                    /* Clean, Bright Real Image Preview Container */
+                    <div className="bg-zinc-50 border border-zinc-200 rounded-2xl p-3 relative group">
+                      <div
+                        onClick={() => openLightboxModal(activeProofUrl)}
+                        className="relative max-h-[420px] w-full flex items-center justify-center bg-white rounded-xl overflow-hidden cursor-zoom-in border border-zinc-100 shadow-2xs"
+                      >
+                        <img
+                          src={activeProofUrl}
+                          alt="Bukti Transfer Pembayaran Asli"
+                          className="w-full max-h-[420px] object-contain rounded-xl bg-white"
+                          onError={(e) => {
+                            const target = e.currentTarget;
+                            const filename = payment?.proofOfPaymentUrl?.split('/').pop();
+                            if (filename && !target.src.includes(`/uploads/payments/${filename}`)) {
+                              target.src = `/uploads/payments/${filename}`;
+                            }
+                          }}
+                        />
+
+                        {/* Hover Overlay Toolbar */}
+                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-semibold gap-2 backdrop-blur-[2px]">
+                          <div className="bg-zinc-900/90 px-4 py-2 rounded-full border border-zinc-700 shadow-lg flex items-center gap-1.5">
+                            <ZoomIn className="w-4 h-4 text-amber-400" />
+                            <span>Klik gambar untuk memperbesar</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Persistent Caption Bar */}
+                      <div className="mt-2.5 px-2 flex items-center justify-between text-[11px] text-zinc-500">
+                        <span className="flex items-center gap-1">
+                          <FileCheck2 className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Klik gambar untuk memperbesar</span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => openLightboxModal(activeProofUrl)}
+                          className="text-amber-800 hover:text-amber-900 font-semibold flex items-center gap-1 cursor-pointer"
+                        >
+                          <ZoomIn className="w-3.5 h-3.5" />
+                          <span>Perbesar Gambar</span>
+                        </button>
                       </div>
                     </div>
+                  )}
+                </div>
 
-                    {/* Bank Account Details Card */}
-                    <div className="bg-zinc-100/70 border border-zinc-200 rounded-2xl p-4 sm:p-5 space-y-3">
-                      <div className="flex items-center justify-between pb-3 border-b border-zinc-200">
-                        <span className="text-xs text-zinc-500 font-medium">Bank Tujuan</span>
-                        <span className="text-sm font-bold text-zinc-900">{activeBank.bankName}</span>
+                {/* Bottom Action Row */}
+                <div className="pt-2 flex flex-col sm:flex-row items-center gap-3">
+                  <Link
+                    href={`/orders/${order.orderNumber}`}
+                    className="w-full sm:flex-1 py-3.5 bg-zinc-900 hover:bg-zinc-800 text-white rounded-full text-xs sm:text-sm font-semibold shadow-md flex items-center justify-center gap-2 transition-all"
+                  >
+                    <span>Pantau Status Pesanan</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </Link>
+
+                  <a
+                    href={`https://wa.me/6283876942484?text=Halo%20Admin%20Toko%20Enstein,%20saya%20sudah%20mengunggah%20bukti%20transfer%20untuk%20pesanan%20%23${order.orderNumber}.%20Mohon%20bantuannya%20untuk%20diverifikasi.%20Terima%20kasih!`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full sm:w-auto px-6 py-3.5 border border-emerald-300 bg-emerald-50/80 hover:bg-emerald-100 text-emerald-900 rounded-full text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-all"
+                  >
+                    <MessageCircle className="w-4 h-4 text-emerald-700" />
+                    <span>Konfirmasi Cepat via WhatsApp</span>
+                  </a>
+                </div>
+
+              </div>
+            ) : currentPaymentStatus === 'PAID' ? (
+              /* STATE 3: PAID CONFIRMATION CARD (REAL IMAGE) */
+              <div className="bg-white rounded-3xl border border-emerald-200 p-6 sm:p-8 shadow-xs space-y-6">
+                <div className="w-16 h-16 rounded-3xl bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-600 mx-auto">
+                  <CheckCircle2 className="w-8 h-8" />
+                </div>
+                <div className="text-center">
+                  <span className="text-[11px] font-bold text-emerald-700 uppercase tracking-wider bg-emerald-50 px-3 py-1 rounded-full border border-emerald-200">
+                    Lunas &amp; Terverifikasi
+                  </span>
+                  <h3 className="text-2xl font-extrabold text-zinc-900 tracking-tight mt-3">
+                    Pembayaran Berhasil Dikonfirmasi
+                  </h3>
+                  <p className="text-zinc-600 text-xs sm:text-sm max-w-md mx-auto mt-1 leading-relaxed">
+                    Pesanan Anda telah lunas sebesar <strong>{formatIDR(order.totalAmount)}</strong>. Bahan konveksi Anda kini siap diproses dan dikemas oleh staf Toko Enstein.
+                  </p>
+                </div>
+
+                {/* Metadata Grid */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-zinc-50 rounded-2xl p-4 border border-zinc-200/70 text-xs">
+                  <div>
+                    <span className="text-[11px] text-zinc-400 font-medium block">Nomor Pesanan</span>
+                    <strong className="text-zinc-900 font-mono font-bold block">#{order.orderNumber}</strong>
+                  </div>
+                  <div>
+                    <span className="text-[11px] text-zinc-400 font-medium block">Waktu Verifikasi</span>
+                    <span className="text-zinc-800 font-medium block">{formatDate(payment?.verifiedAt || order.orderDate)}</span>
+                  </div>
+                  <div>
+                    <span className="text-[11px] text-zinc-400 font-medium block">Status Transaksi</span>
+                    <strong className="text-emerald-700 font-extrabold block">LUNAS (PAID)</strong>
+                  </div>
+                </div>
+
+                {/* Real Proof Preview if available */}
+                {activeProofUrl && (
+                  <div className="bg-zinc-50 border border-zinc-200 rounded-2xl p-3 relative group">
+                    <div
+                      onClick={() => openLightboxModal(activeProofUrl)}
+                      className="relative max-h-[380px] w-full flex items-center justify-center bg-white rounded-xl overflow-hidden cursor-zoom-in"
+                    >
+                      <img
+                        src={activeProofUrl}
+                        alt="Bukti Transfer Lunas Asli"
+                        className="max-h-[380px] w-full object-contain rounded-xl"
+                      />
+                    </div>
+                    <div className="mt-2 text-center">
+                      <button
+                        type="button"
+                        onClick={() => openLightboxModal(activeProofUrl)}
+                        className="text-xs font-semibold text-zinc-600 hover:text-zinc-900 inline-flex items-center gap-1 cursor-pointer"
+                      >
+                        <ZoomIn className="w-3.5 h-3.5 text-zinc-400" />
+                        <span>Lihat Bukti Transfer Penuh</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="pt-2 flex flex-wrap justify-center gap-3">
+                  <Link
+                    href={`/orders/${order.orderNumber}`}
+                    className="px-7 py-3.5 bg-zinc-900 hover:bg-zinc-800 text-white rounded-full text-xs font-semibold shadow-md inline-flex items-center gap-1.5"
+                  >
+                    <span>Pantau Proses Pesanan</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </Link>
+                  <Link
+                    href="/products"
+                    className="px-6 py-3.5 border border-zinc-200 hover:bg-zinc-50 text-zinc-700 rounded-full text-xs font-semibold"
+                  >
+                    Kembali Belanja
+                  </Link>
+                </div>
+              </div>
+            ) : (
+              /* STATE 4: PENDING / REJECTED (ACTIVE PAYMENT FORMS) */
+              <>
+                {/* Rejection Alert Banner if previous proof rejected */}
+                {currentPaymentStatus === 'REJECTED' && (
+                  <div className="p-5 rounded-3xl bg-rose-50 border border-rose-200 text-rose-900 text-xs sm:text-sm space-y-3 shadow-xs">
+                    <div className="flex items-start gap-3">
+                      <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-bold text-sm">Bukti Pembayaran Sebelumnya Ditolak Admin</p>
+                        <p className="mt-0.5 text-rose-700 leading-relaxed">
+                          Alasan penolakan: &ldquo;{payment?.rejectionReason || 'Bukti transfer tidak terbaca, struk terpotong, atau nominal tidak sesuai.'}&rdquo;
+                        </p>
+                        <p className="text-[11px] text-rose-600 mt-1">
+                          Silakan tinjau kembali rekening tujuan di bawah ini dan unggah foto/struk transfer yang jelas.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Payment Method Switcher Tabs */}
+                <div className="bg-white rounded-3xl border border-zinc-200/80 p-2 flex flex-wrap gap-1 shadow-xs">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedMethod('BANK_TRANSFER')}
+                    className={`flex-1 min-w-[120px] py-2.5 px-3 rounded-2xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                      selectedMethod === 'BANK_TRANSFER'
+                        ? 'bg-zinc-900 text-white shadow-xs'
+                        : 'text-zinc-600 hover:bg-zinc-100'
+                    }`}
+                  >
+                    <Building2 className="w-4 h-4" />
+                    <span>Transfer Bank</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setSelectedMethod('E_WALLET')}
+                    className={`flex-1 min-w-[120px] py-2.5 px-3 rounded-2xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                      selectedMethod === 'E_WALLET'
+                        ? 'bg-zinc-900 text-white shadow-xs'
+                        : 'text-zinc-600 hover:bg-zinc-100'
+                    }`}
+                  >
+                    <Wallet className="w-4 h-4" />
+                    <span>E-Wallet / QRIS</span>
+                  </button>
+
+                  {order.fulfillmentMethod === 'PICKUP' && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedMethod('CASH')}
+                      className={`flex-1 min-w-[120px] py-2.5 px-3 rounded-2xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                        selectedMethod === 'CASH'
+                          ? 'bg-zinc-900 text-white shadow-xs'
+                          : 'text-zinc-600 hover:bg-zinc-100'
+                      }`}
+                    >
+                      <Banknote className="w-4 h-4" />
+                      <span>Bayar Tunai</span>
+                    </button>
+                  )}
+
+                  {isSimulationAllowed && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedMethod('SIMULATED')}
+                      className={`flex-1 min-w-[120px] py-2.5 px-3 rounded-2xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                        selectedMethod === 'SIMULATED'
+                          ? 'bg-zinc-900 text-white shadow-xs'
+                          : 'text-zinc-600 hover:bg-zinc-100'
+                      }`}
+                    >
+                      <Sparkles className="w-4 h-4 text-amber-400" />
+                      <span>Mode Demo</span>
+                    </button>
+                  )}
+                </div>
+
+                {/* TAB 1: TRANSFER BANK */}
+                {selectedMethod === 'BANK_TRANSFER' && (
+                  <div className="bg-white rounded-3xl border border-zinc-200/80 p-6 sm:p-7 shadow-xs space-y-6">
+                    <div>
+                      <h3 className="text-base sm:text-lg font-bold text-zinc-900 tracking-tight">
+                        Transfer Bank Manual
+                      </h3>
+                      <p className="text-xs text-zinc-500 mt-0.5">
+                        Pilih salah satu rekening tujuan Toko Enstein, lakukan transfer, lalu unggah foto/tangkapan layar bukti transfer.
+                      </p>
+                    </div>
+
+                    {/* Bank Selection Pills */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      {bankAccounts.map((b, idx) => (
+                        <div
+                          key={b.bankCode || idx}
+                          onClick={() => setSelectedBankIdx(idx)}
+                          className={`p-3.5 rounded-2xl border-2 transition-all cursor-pointer flex flex-col justify-between ${
+                            selectedBankIdx === idx
+                              ? 'border-zinc-900 bg-zinc-900/[0.02] shadow-xs'
+                              : 'border-zinc-200/80 hover:border-zinc-300 bg-white'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-extrabold text-zinc-900">{b.bankCode}</span>
+                            <div
+                              className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
+                                selectedBankIdx === idx ? 'border-zinc-900 bg-zinc-900 text-white' : 'border-zinc-300'
+                              }`}
+                            >
+                              {selectedBankIdx === idx && <Check className="w-2.5 h-2.5 stroke-[3]" />}
+                            </div>
+                          </div>
+                          <span className="text-[11px] text-zinc-500 font-mono mt-2 truncate">
+                            {b.accountNumber}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Selected Bank Details Card */}
+                    <div className="bg-zinc-50 rounded-2xl p-4 sm:p-5 border border-zinc-200/80 space-y-3.5 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="text-zinc-500 font-medium">Bank Tujuan:</span>
+                        <strong className="text-zinc-900">{activeBank.bankName}</strong>
                       </div>
 
-                      <div className="flex items-center justify-between pb-3 border-b border-zinc-200">
-                        <div>
-                          <span className="text-xs text-zinc-500 font-medium block">Nomor Rekening</span>
-                          <span className="text-base sm:text-lg font-mono font-bold text-zinc-900 tracking-wider">
+                      <div className="flex items-center justify-between pt-2 border-t border-zinc-200/60">
+                        <span className="text-zinc-500 font-medium">Nomor Rekening:</span>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono font-bold text-sm text-zinc-900">
                             {activeBank.accountNumber}
                           </span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleCopy(
-                              activeBank.accountNumber,
-                              `Nomor Rekening ${activeBank.logoText}`,
-                              'bankAcc'
-                            )
-                          }
-                          className="px-3 py-1.5 rounded-lg bg-white border border-zinc-200 hover:bg-zinc-50 text-xs font-semibold text-zinc-800 transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer"
-                        >
-                          {copiedKey === 'bankAcc' ? (
-                            <>
-                              <CheckCheck className="w-3.5 h-3.5 text-emerald-600" />
-                              <span className="text-emerald-700">Tersalin</span>
-                            </>
-                          ) : (
-                            <>
-                              <Copy className="w-3.5 h-3.5 text-zinc-500" />
-                              <span>Salin No. Rek</span>
-                            </>
-                          )}
-                        </button>
-                      </div>
-
-                      <div className="flex items-center justify-between pb-3 border-b border-zinc-200">
-                        <span className="text-xs text-zinc-500 font-medium">Atas Nama (A.N)</span>
-                        <span className="text-sm font-bold text-zinc-900 uppercase">
-                          {activeBank.accountHolder}
-                        </span>
-                      </div>
-
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <span className="text-xs text-zinc-500 font-medium block">Nominal Transfer Tepat</span>
-                          <span className="text-base sm:text-lg font-mono font-bold text-zinc-900">
-                            {formatRupiah(TOTAL_AMOUNT)}
-                          </span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleCopy(TOTAL_AMOUNT.toString(), 'Nominal Transfer', 'amount')
-                          }
-                          className="px-3 py-1.5 rounded-lg bg-white border border-zinc-200 hover:bg-zinc-50 text-xs font-semibold text-zinc-800 transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer"
-                        >
-                          {copiedKey === 'amount' ? (
-                            <>
-                              <CheckCheck className="w-3.5 h-3.5 text-emerald-600" />
-                              <span className="text-emerald-700">Tersalin</span>
-                            </>
-                          ) : (
-                            <>
-                              <Copy className="w-3.5 h-3.5 text-zinc-500" />
-                              <span>Salin Jumlah</span>
-                            </>
-                          )}
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Modern Drag & Drop File Upload Zone */}
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <label className="text-xs font-semibold text-zinc-700 uppercase tracking-wider">
-                          Unggah Bukti Transfer:
-                        </label>
-                        <span className="text-[11px] text-zinc-400">Maks. 2MB (JPG/PNG)</span>
-                      </div>
-
-                      {/* Hidden File Input */}
-                      <input
-                        ref={fileInputRef}
-                        type="file"
-                        accept="image/png, image/jpeg, image/jpg, image/webp"
-                        onChange={handleFileInputChange}
-                        className="hidden"
-                      />
-
-                      {/* Drop Zone Box */}
-                      {!uploadedFile ? (
-                        <div
-                          onClick={() => fileInputRef.current?.click()}
-                          onDragOver={handleDragOver}
-                          onDragLeave={handleDragLeave}
-                          onDrop={handleDrop}
-                          className={`border-2 border-dashed rounded-2xl p-8 flex flex-col items-center justify-center transition-colors cursor-pointer text-center group ${
-                            isDragging
-                              ? 'border-zinc-900 bg-zinc-100 ring-2 ring-zinc-900/10'
-                              : 'border-zinc-300 bg-zinc-50 hover:bg-zinc-100'
-                          }`}
-                        >
-                          <div className="w-12 h-12 rounded-2xl bg-white shadow-xs border border-zinc-200 flex items-center justify-center text-zinc-600 group-hover:scale-110 group-hover:text-zinc-900 transition-transform">
-                            <UploadCloud className="w-6 h-6" />
-                          </div>
-                          <p className="mt-3 text-sm font-semibold text-zinc-800">
-                            Tarik &amp; Lepas bukti transfer atau{' '}
-                            <span className="text-amber-600 underline underline-offset-2">
-                              Klik di sini
-                            </span>
-                          </p>
-                          <p className="text-xs text-zinc-400 mt-1">
-                            Format JPG, JPEG, atau PNG (Maks. 2MB)
-                          </p>
-                        </div>
-                      ) : (
-                        /* Uploaded File Preview Card */
-                        <div className="border border-zinc-200 bg-white rounded-2xl p-4 flex items-center justify-between gap-4 shadow-xs">
-                          <div className="flex items-center gap-3 overflow-hidden">
-                            {uploadPreviewUrl ? (
-                              <img
-                                src={uploadPreviewUrl}
-                                alt="Preview Bukti Transfer"
-                                className="w-14 h-14 rounded-xl object-cover border border-zinc-200 shrink-0"
-                              />
-                            ) : (
-                              <div className="w-14 h-14 rounded-xl bg-zinc-100 flex items-center justify-center text-zinc-500 shrink-0">
-                                <FileCheck className="w-6 h-6 text-emerald-600" />
-                              </div>
-                            )}
-                            <div className="overflow-hidden">
-                              <p className="text-sm font-bold text-zinc-900 truncate">
-                                {uploadedFile.name}
-                              </p>
-                              <p className="text-xs text-zinc-400 mt-0.5">
-                                {(uploadedFile.size / 1024).toFixed(1)} KB • Siap diunggah
-                              </p>
-                              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600 mt-1">
-                                <Check className="w-3 h-3" /> Berkas valid
-                              </span>
-                            </div>
-                          </div>
-
-                          <div className="flex items-center gap-2 shrink-0">
-                            <button
-                              type="button"
-                              onClick={() => fileInputRef.current?.click()}
-                              className="px-3 py-1.5 rounded-lg text-xs font-medium text-zinc-600 bg-zinc-100 hover:bg-zinc-200 transition-colors cursor-pointer"
-                            >
-                              Ganti
-                            </button>
-                            <button
-                              type="button"
-                              onClick={handleRemoveFile}
-                              className="p-1.5 rounded-lg text-red-500 hover:text-red-700 hover:bg-red-50 transition-colors cursor-pointer"
-                              title="Hapus berkas"
-                            >
-                              <X className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Error message */}
-                      {uploadError && (
-                        <div className="mt-2.5 p-3 rounded-xl bg-red-50 border border-red-200 flex items-start gap-2 text-xs text-red-700">
-                          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                          <span>{uploadError}</span>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Submit Button */}
-                    <button
-                      type="button"
-                      disabled={isSubmitting}
-                      onClick={handleSubmitManualProof}
-                      className="bg-zinc-900 text-white w-full py-4 rounded-full mt-6 font-semibold hover:bg-zinc-800 transition-all shadow-md active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 cursor-pointer"
-                    >
-                      {isSubmitting ? (
-                        <>
-                          <RefreshCw className="w-4 h-4 animate-spin" />
-                          <span>Mengunggah Bukti Pembayaran...</span>
-                        </>
-                      ) : (
-                        <>
-                          <span>Unggah &amp; Konfirmasi Pembayaran</span>
-                          <ArrowRight className="w-4 h-4" />
-                        </>
-                      )}
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {/* ------------------------------------------------------------- */}
-              {/* METHOD 2: E-WALLET / QRIS (MANUAL)                            */}
-              {/* ------------------------------------------------------------- */}
-              <div
-                className={`rounded-2xl border transition-all duration-300 overflow-hidden ${
-                  selectedMethod === 'ewallet'
-                    ? 'border-zinc-900 bg-white shadow-md ring-1 ring-zinc-900/5'
-                    : 'border-zinc-200 bg-transparent text-zinc-500 hover:border-zinc-400 hover:bg-zinc-50/50'
-                }`}
-              >
-                {/* Clickable Header Card */}
-                <button
-                  type="button"
-                  onClick={() => setSelectedMethod('ewallet')}
-                  className="w-full p-5 sm:p-6 text-left flex items-start sm:items-center justify-between gap-4 cursor-pointer focus:outline-none"
-                >
-                  <div className="flex items-center gap-4">
-                    {/* Radio Indicator */}
-                    <div
-                      className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors ${
-                        selectedMethod === 'ewallet'
-                          ? 'border-zinc-900 bg-zinc-900'
-                          : 'border-zinc-300 bg-transparent'
-                      }`}
-                    >
-                      {selectedMethod === 'ewallet' && (
-                        <div className="w-2 h-2 rounded-full bg-white" />
-                      )}
-                    </div>
-
-                    {/* Icon */}
-                    <div
-                      className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 transition-colors ${
-                        selectedMethod === 'ewallet'
-                          ? 'bg-zinc-900 text-white'
-                          : 'bg-zinc-100 text-zinc-600'
-                      }`}
-                    >
-                      <QrCode className="w-5 h-5" />
-                    </div>
-
-                    {/* Label */}
-                    <div>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-bold text-zinc-900 text-base sm:text-lg">
-                          E-Wallet / QRIS
-                        </span>
-                        <span className="text-[11px] font-semibold bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">
-                          QRIS &amp; Dompet Digital
-                        </span>
-                      </div>
-                      <p className="text-xs sm:text-sm text-zinc-500 mt-0.5">
-                        Scan QRIS via GoPay, OVO, DANA, ShopeePay, atau BCA Mobile.
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Toggle Arrow */}
-                  <div className="text-zinc-400 shrink-0 mt-1 sm:mt-0">
-                    {selectedMethod === 'ewallet' ? (
-                      <ChevronUp className="w-5 h-5 text-zinc-900" />
-                    ) : (
-                      <ChevronDown className="w-5 h-5" />
-                    )}
-                  </div>
-                </button>
-
-                {/* Expanded Accordion Content */}
-                {selectedMethod === 'ewallet' && (
-                  <div className="px-5 sm:px-6 pb-6 pt-2 border-t border-zinc-100 space-y-6 animate-in fade-in duration-200">
-                    
-                    {/* QRIS Graphic & Instructions */}
-                    <div className="bg-zinc-100/70 border border-zinc-200 rounded-2xl p-5 sm:p-6 flex flex-col sm:flex-row items-center gap-6">
-                      {/* Stylized QR Code Frame */}
-                      <div className="bg-white p-4 rounded-2xl border border-zinc-200 shadow-sm flex flex-col items-center shrink-0">
-                        <div className="w-40 h-40 bg-zinc-900 rounded-xl p-2 flex items-center justify-center relative overflow-hidden">
-                          {/* Inner Mock QR Matrix Pattern */}
-                          <div className="w-full h-full bg-white rounded-lg p-2 grid grid-cols-6 grid-rows-6 gap-1 relative">
-                            {/* Corner squares */}
-                            <div className="col-span-2 row-span-2 border-4 border-zinc-900 rounded-xs flex items-center justify-center p-0.5">
-                              <div className="w-full h-full bg-zinc-900 rounded-xs" />
-                            </div>
-                            <div className="col-span-2 col-start-5 row-span-2 border-4 border-zinc-900 rounded-xs flex items-center justify-center p-0.5">
-                              <div className="w-full h-full bg-zinc-900 rounded-xs" />
-                            </div>
-                            <div className="col-span-2 row-span-2 row-start-5 border-4 border-zinc-900 rounded-xs flex items-center justify-center p-0.5">
-                              <div className="w-full h-full bg-zinc-900 rounded-xs" />
-                            </div>
-                            
-                            {/* Random-like pixel matrix */}
-                            <div className="col-start-3 row-start-2 bg-zinc-900 rounded-xs" />
-                            <div className="col-start-4 row-start-2 bg-zinc-900 rounded-xs" />
-                            <div className="col-start-3 row-start-3 bg-zinc-900 rounded-xs" />
-                            <div className="col-start-4 row-start-4 bg-zinc-900 rounded-xs" />
-                            <div className="col-start-5 row-start-3 bg-zinc-900 rounded-xs" />
-                            <div className="col-start-5 row-start-4 bg-zinc-900 rounded-xs" />
-                            <div className="col-start-6 row-start-4 bg-zinc-900 rounded-xs" />
-                            <div className="col-start-3 row-start-5 bg-zinc-900 rounded-xs" />
-                            <div className="col-start-4 row-start-5 bg-zinc-900 rounded-xs" />
-
-                            {/* Center brand dot */}
-                            <div className="absolute inset-0 m-auto w-6 h-6 rounded-md bg-amber-500 text-white flex items-center justify-center text-[10px] font-black shadow-xs">
-                              E
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="mt-2 text-center">
-                          <span className="text-[10px] font-bold tracking-widest text-zinc-400 uppercase block">
-                            NMID: {EWALLET_OPTIONS.nmid}
-                          </span>
-                          <span className="text-xs font-bold text-zinc-900 block mt-0.5">
-                            TOKO ENSTEIN KEBUMEN
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Instruction Steps */}
-                      <div className="space-y-3 text-left w-full">
-                        <h4 className="text-sm font-bold text-zinc-900">
-                          Cara Pembayaran via QRIS:
-                        </h4>
-                        <ol className="text-xs text-zinc-600 space-y-2 list-decimal list-inside leading-relaxed">
-                          <li>Buka aplikasi e-wallet (GoPay, OVO, DANA, ShopeePay) atau Mobile Banking.</li>
-                          <li>Pilih menu <strong>Pindai / Scan QRIS</strong>.</li>
-                          <li>Arahkan kamera ke kode QR di samping.</li>
-                          <li>
-                            Pastikan nominal pembayaran adalah{' '}
-                            <strong className="text-zinc-900 font-mono">{formatRupiah(TOTAL_AMOUNT)}</strong>.
-                          </li>
-                          <li>Simpan tangkapan layar (screenshot) bukti pembayaran yang sukses.</li>
-                        </ol>
-
-                        <div className="pt-2">
                           <button
                             type="button"
-                            onClick={() => showToast('Kode QRIS Toko Enstein diunduh!')}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-200 bg-white text-xs font-semibold text-zinc-700 hover:bg-zinc-50 transition-colors shadow-xs cursor-pointer"
+                            onClick={() => handleCopy(activeBank.accountNumber, 'bankAcc')}
+                            className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-2 py-0.5 rounded-md transition-colors cursor-pointer"
                           >
-                            <Download className="w-3.5 h-3.5" />
-                            <span>Unduh Kode QR</span>
+                            {copiedKey === 'bankAcc' ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                            <span>{copiedKey === 'bankAcc' ? 'Tersalin' : 'Salin Rekening'}</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between pt-2 border-t border-zinc-200/60">
+                        <span className="text-zinc-500 font-medium">Atas Nama (A/N):</span>
+                        <strong className="text-zinc-900 font-bold">{activeBank.accountHolder}</strong>
+                      </div>
+
+                      <div className="flex items-center justify-between pt-2 border-t border-zinc-200/60">
+                        <span className="text-zinc-500 font-medium">Nominal Transfer Tepat:</span>
+                        <div className="flex items-center gap-2">
+                          <strong className="text-base font-extrabold text-zinc-900">
+                            {formatIDR(order.totalAmount)}
+                          </strong>
+                          <button
+                            type="button"
+                            onClick={() => handleCopy(String(order.totalAmount), 'amount')}
+                            className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-2 py-0.5 rounded-md transition-colors cursor-pointer"
+                          >
+                            {copiedKey === 'amount' ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                            <span>{copiedKey === 'amount' ? 'Tersalin' : 'Salin Jumlah'}</span>
                           </button>
                         </div>
                       </div>
                     </div>
 
-                    {/* Drag & Drop Upload Zone for E-Wallet Proof */}
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <label className="text-xs font-semibold text-zinc-700 uppercase tracking-wider">
-                          Unggah Tangkapan Layar Bukti QRIS:
+                    {/* Proof Upload Form */}
+                    <form onSubmit={handleUploadProof} className="pt-2 border-t border-zinc-100 space-y-4">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-bold text-zinc-800 uppercase tracking-wider">
+                          Unggah Bukti Transfer <span className="text-rose-500">*</span>
                         </label>
-                        <span className="text-[11px] text-zinc-400">Maks. 2MB (JPG/PNG)</span>
+                        <span className="text-[11px] text-zinc-400">Maksimal 2 MB (JPG, PNG, WEBP)</span>
                       </div>
 
-                      {!uploadedFile ? (
-                        <div
-                          onClick={() => fileInputRef.current?.click()}
-                          onDragOver={handleDragOver}
-                          onDragLeave={handleDragLeave}
-                          onDrop={handleDrop}
-                          className={`border-2 border-dashed rounded-2xl p-8 flex flex-col items-center justify-center transition-colors cursor-pointer text-center group ${
-                            isDragging
-                              ? 'border-zinc-900 bg-zinc-100 ring-2 ring-zinc-900/10'
-                              : 'border-zinc-300 bg-zinc-50 hover:bg-zinc-100'
-                          }`}
-                        >
-                          <div className="w-12 h-12 rounded-2xl bg-white shadow-xs border border-zinc-200 flex items-center justify-center text-zinc-600 group-hover:scale-110 group-hover:text-zinc-900 transition-transform">
-                            <UploadCloud className="w-6 h-6" />
-                          </div>
-                          <p className="mt-3 text-sm font-semibold text-zinc-800">
-                            Tarik &amp; Lepas screenshot bukti transfer atau{' '}
-                            <span className="text-amber-600 underline underline-offset-2">
-                              Klik di sini
-                            </span>
-                          </p>
-                          <p className="text-xs text-zinc-400 mt-1">
-                            Format JPG, JPEG, atau PNG (Maks. 2MB)
-                          </p>
-                        </div>
-                      ) : (
-                        <div className="border border-zinc-200 bg-white rounded-2xl p-4 flex items-center justify-between gap-4 shadow-xs">
-                          <div className="flex items-center gap-3 overflow-hidden">
-                            {uploadPreviewUrl ? (
-                              <img
-                                src={uploadPreviewUrl}
-                                alt="Preview Bukti E-Wallet"
-                                className="w-14 h-14 rounded-xl object-cover border border-zinc-200 shrink-0"
-                              />
-                            ) : (
-                              <div className="w-14 h-14 rounded-xl bg-zinc-100 flex items-center justify-center text-zinc-500 shrink-0">
-                                <FileCheck className="w-6 h-6 text-emerald-600" />
-                              </div>
-                            )}
-                            <div className="overflow-hidden">
-                              <p className="text-sm font-bold text-zinc-900 truncate">
-                                {uploadedFile.name}
-                              </p>
-                              <p className="text-xs text-zinc-400 mt-0.5">
-                                {(uploadedFile.size / 1024).toFixed(1)} KB • Siap dikonfirmasi
-                              </p>
-                              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600 mt-1">
-                                <Check className="w-3 h-3" /> Berkas valid
-                              </span>
-                            </div>
-                          </div>
-
-                          <div className="flex items-center gap-2 shrink-0">
-                            <button
-                              type="button"
-                              onClick={() => fileInputRef.current?.click()}
-                              className="px-3 py-1.5 rounded-lg text-xs font-medium text-zinc-600 bg-zinc-100 hover:bg-zinc-200 transition-colors cursor-pointer"
-                            >
-                              Ganti
-                            </button>
-                            <button
-                              type="button"
-                              onClick={handleRemoveFile}
-                              className="p-1.5 rounded-lg text-red-500 hover:text-red-700 hover:bg-red-50 transition-colors cursor-pointer"
-                              title="Hapus berkas"
-                            >
-                              <X className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </div>
-                      )}
-
                       {uploadError && (
-                        <div className="mt-2.5 p-3 rounded-xl bg-red-50 border border-red-200 flex items-start gap-2 text-xs text-red-700">
-                          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                        <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-center gap-2">
+                          <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
                           <span>{uploadError}</span>
                         </div>
                       )}
-                    </div>
 
-                    {/* Submit Button */}
-                    <button
-                      type="button"
-                      disabled={isSubmitting}
-                      onClick={handleSubmitManualProof}
-                      className="bg-zinc-900 text-white w-full py-4 rounded-full mt-6 font-semibold hover:bg-zinc-800 transition-all shadow-md active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 cursor-pointer"
-                    >
-                      {isSubmitting ? (
-                        <>
-                          <RefreshCw className="w-4 h-4 animate-spin" />
-                          <span>Mengunggah Bukti Pembayaran...</span>
-                        </>
-                      ) : (
-                        <>
-                          <span>Unggah &amp; Konfirmasi Pembayaran</span>
-                          <ArrowRight className="w-4 h-4" />
-                        </>
-                      )}
-                    </button>
+                      <div
+                        onClick={() => fileInputRef.current?.click()}
+                        className="border-2 border-dashed border-zinc-300 hover:border-zinc-400 rounded-3xl p-6 sm:p-7 text-center cursor-pointer transition-all bg-zinc-50/50 hover:bg-zinc-50"
+                      >
+                        <input
+                          type="file"
+                          ref={fileInputRef}
+                          onChange={handleFileChange}
+                          accept="image/jpeg,image/png,image/webp"
+                          className="hidden"
+                        />
+
+                        {previewUrl ? (
+                          <div className="flex flex-col items-center">
+                            <div className="relative max-h-52 w-full max-w-sm rounded-xl overflow-hidden border border-zinc-300 shadow-xs mb-3 group bg-white">
+                              <img src={previewUrl} alt="Preview Bukti" className="max-h-52 w-full object-contain" />
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openLightboxModal(previewUrl);
+                                }}
+                                className="absolute bottom-2 right-2 bg-zinc-900/85 hover:bg-zinc-900 text-white text-[11px] font-semibold px-2.5 py-1 rounded-full flex items-center gap-1 shadow-md"
+                              >
+                                <ZoomIn className="w-3 h-3 text-amber-400" />
+                                <span>Perbesar</span>
+                              </button>
+                            </div>
+                            <p className="text-xs font-semibold text-zinc-800">{selectedFile?.name}</p>
+                            <p className="text-[11px] text-amber-700 font-medium mt-1">Klik area ini jika ingin mengganti gambar</p>
+                          </div>
+                        ) : (
+                          <div className="flex flex-col items-center">
+                            <div className="w-12 h-12 rounded-2xl bg-white border border-zinc-200 flex items-center justify-center text-zinc-500 mb-3 shadow-2xs">
+                              <UploadCloud className="w-6 h-6" />
+                            </div>
+                            <p className="text-xs sm:text-sm font-semibold text-zinc-800">
+                              Tarik &amp; lepas berkas bukti transfer, atau <span className="text-amber-700 underline">klik di sini</span>
+                            </p>
+                            <p className="text-[11px] text-zinc-400 mt-1">Pastikan nama rekening pengirim dan nominal terbaca jelas</p>
+                          </div>
+                        )}
+                      </div>
+
+                      <button
+                        type="submit"
+                        disabled={!selectedFile || isUploading}
+                        className="w-full py-4 bg-zinc-900 hover:bg-zinc-800 active:scale-[0.99] text-white rounded-full text-xs sm:text-sm font-semibold shadow-md transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                      >
+                        {isUploading ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            <span>Mengunggah Bukti Pembayaran...</span>
+                          </>
+                        ) : (
+                          <>
+                            <span>Unggah &amp; Konfirmasi Pembayaran</span>
+                            <ArrowRight className="w-4 h-4" />
+                          </>
+                        )}
+                      </button>
+                    </form>
                   </div>
                 )}
-              </div>
 
-              {/* ------------------------------------------------------------- */}
-              {/* METHOD 3: CASH ON PICKUP (FR-20)                              */}
-              {/* ------------------------------------------------------------- */}
-              <div
-                className={`rounded-2xl border transition-all duration-300 overflow-hidden ${
-                  selectedMethod === 'cod'
-                    ? 'border-zinc-900 bg-white shadow-md ring-1 ring-zinc-900/5'
-                    : 'border-zinc-200 bg-transparent text-zinc-500 hover:border-zinc-400 hover:bg-zinc-50/50'
-                }`}
-              >
-                {/* Clickable Header Card */}
-                <button
-                  type="button"
-                  onClick={() => setSelectedMethod('cod')}
-                  className="w-full p-5 sm:p-6 text-left flex items-start sm:items-center justify-between gap-4 cursor-pointer focus:outline-none"
-                >
-                  <div className="flex items-center gap-4">
-                    {/* Radio Indicator */}
-                    <div
-                      className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors ${
-                        selectedMethod === 'cod'
-                          ? 'border-zinc-900 bg-zinc-900'
-                          : 'border-zinc-300 bg-transparent'
-                      }`}
-                    >
-                      {selectedMethod === 'cod' && (
-                        <div className="w-2 h-2 rounded-full bg-white" />
-                      )}
-                    </div>
-
-                    {/* Icon */}
-                    <div
-                      className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 transition-colors ${
-                        selectedMethod === 'cod'
-                          ? 'bg-zinc-900 text-white'
-                          : 'bg-zinc-100 text-zinc-600'
-                      }`}
-                    >
-                      <Store className="w-5 h-5" />
-                    </div>
-
-                    {/* Label */}
+                {/* TAB 2: E-WALLET / QRIS */}
+                {selectedMethod === 'E_WALLET' && (
+                  <div className="bg-white rounded-3xl border border-zinc-200/80 p-6 sm:p-7 shadow-xs space-y-6">
                     <div>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-bold text-zinc-900 text-base sm:text-lg">
-                          Cash on Pickup (Bayar Tunai di Toko)
-                        </span>
-                        <span className="text-[11px] font-semibold bg-zinc-100 text-zinc-700 border border-zinc-200 px-2 py-0.5 rounded-full">
-                          Ambil di Toko
-                        </span>
-                      </div>
-                      <p className="text-xs sm:text-sm text-zinc-500 mt-0.5">
-                        Bayar langsung dengan uang pas saat mengambil pesanan di Toko Enstein Kebumen.
+                      <h3 className="text-base sm:text-lg font-bold text-zinc-900 tracking-tight">
+                        E-Wallet &amp; QRIS
+                      </h3>
+                      <p className="text-xs text-zinc-500 mt-0.5">
+                        Scan QRIS atau transfer ke akun E-Wallet resmi Toko Enstein Kebumen.
                       </p>
                     </div>
-                  </div>
 
-                  {/* Toggle Arrow */}
-                  <div className="text-zinc-400 shrink-0 mt-1 sm:mt-0">
-                    {selectedMethod === 'cod' ? (
-                      <ChevronUp className="w-5 h-5 text-zinc-900" />
-                    ) : (
-                      <ChevronDown className="w-5 h-5" />
-                    )}
-                  </div>
-                </button>
-
-                {/* Expanded Accordion Content */}
-                {selectedMethod === 'cod' && (
-                  <div className="px-5 sm:px-6 pb-6 pt-2 border-t border-zinc-100 space-y-5 animate-in fade-in duration-200">
-                    {/* Info Text Box */}
-                    <div className="p-5 rounded-2xl bg-zinc-50 border border-zinc-200 space-y-3">
-                      <div className="flex items-start gap-3">
-                        <Info className="w-5 h-5 text-zinc-600 shrink-0 mt-0.5" />
-                        <div className="text-xs text-zinc-600 leading-relaxed space-y-2">
-                          <p className="font-semibold text-zinc-900 text-sm">
-                            Ketentuan Pembayaran Cash on Pickup:
-                          </p>
-                          <p>
-                            Pesanan Anda akan disiapkan dan stok tetap direservasi. Silakan datang langsung ke toko fisik kami untuk melakukan pembayaran tunai di kasir dan mengambil barang pesanan:
-                          </p>
-                          <div className="p-3 bg-white rounded-xl border border-zinc-200 text-zinc-800 space-y-1 font-medium">
-                            <p className="font-bold text-zinc-900">📍 Lokasi Toko Enstein Kebumen</p>
-                            <p className="text-zinc-600">Jl. Kusuma No. 42, Kebumen, Jawa Tengah</p>
-                            <p className="text-zinc-500 text-[11px]">Jam Operasional: Senin – Sabtu, 08:00 – 17:00 WIB</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {ewallets.map((w, idx) => (
+                        <div
+                          key={w.walletCode || idx}
+                          onClick={() => setSelectedWalletIdx(idx)}
+                          className={`p-3.5 rounded-2xl border-2 transition-all cursor-pointer flex flex-col justify-between ${
+                            selectedWalletIdx === idx
+                              ? 'border-zinc-900 bg-zinc-900/[0.02] shadow-xs'
+                              : 'border-zinc-200/80 hover:border-zinc-300 bg-white'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-extrabold text-zinc-900">{w.walletName}</span>
+                            <div
+                              className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
+                                selectedWalletIdx === idx ? 'border-zinc-900 bg-zinc-900 text-white' : 'border-zinc-300'
+                              }`}
+                            >
+                              {selectedWalletIdx === idx && <Check className="w-2.5 h-2.5 stroke-[3]" />}
+                            </div>
                           </div>
-                          <p className="text-zinc-500 italic">
-                            *Tunjukkan Nomor Pesanan (<strong>#{orderId}</strong>) kepada staf toko kami saat pengambilan. Harap siapkan uang pas sebesar <strong>{formatRupiah(TOTAL_AMOUNT)}</strong>.
+                          <span className="text-[11px] text-zinc-500 font-mono mt-2 truncate">
+                            {w.accountNumber}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="bg-zinc-50 rounded-2xl p-4 sm:p-5 border border-zinc-200/80 space-y-3.5 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="text-zinc-500 font-medium">Pilihan E-Wallet:</span>
+                        <strong className="text-zinc-900">{activeWallet.walletName}</strong>
+                      </div>
+
+                      <div className="flex items-center justify-between pt-2 border-t border-zinc-200/60">
+                        <span className="text-zinc-500 font-medium">Nomor Akun / ID:</span>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono font-bold text-sm text-zinc-900">
+                            {activeWallet.accountNumber}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleCopy(activeWallet.accountNumber, 'walletAcc')}
+                            className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-2 py-0.5 rounded-md cursor-pointer"
+                          >
+                            {copiedKey === 'walletAcc' ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                            <span>{copiedKey === 'walletAcc' ? 'Tersalin' : 'Salin Nomor'}</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between pt-2 border-t border-zinc-200/60">
+                        <span className="text-zinc-500 font-medium">Atas Nama (A/N):</span>
+                        <strong className="text-zinc-900 font-bold">{activeWallet.accountHolder}</strong>
+                      </div>
+
+                      <div className="flex items-center justify-between pt-2 border-t border-zinc-200/60">
+                        <span className="text-zinc-500 font-medium">Nominal Tepat:</span>
+                        <strong className="text-base font-extrabold text-zinc-900">{formatIDR(order.totalAmount)}</strong>
+                      </div>
+                    </div>
+
+                    {/* Upload Proof for E-Wallet */}
+                    <form onSubmit={handleUploadProof} className="pt-2 border-t border-zinc-100 space-y-4">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-bold text-zinc-800 uppercase tracking-wider">
+                          Unggah Tangkapan Layar Pembayaran <span className="text-rose-500">*</span>
+                        </label>
+                      </div>
+
+                      {uploadError && (
+                        <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-center gap-2">
+                          <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                          <span>{uploadError}</span>
+                        </div>
+                      )}
+
+                      <div
+                        onClick={() => fileInputRef.current?.click()}
+                        className="border-2 border-dashed border-zinc-300 hover:border-zinc-400 rounded-3xl p-6 text-center cursor-pointer transition-all bg-zinc-50/50 hover:bg-zinc-50"
+                      >
+                        <input
+                          type="file"
+                          ref={fileInputRef}
+                          onChange={handleFileChange}
+                          accept="image/jpeg,image/png,image/webp"
+                          className="hidden"
+                        />
+                        {previewUrl ? (
+                          <div className="flex flex-col items-center">
+                            <div className="relative max-h-52 w-full max-w-sm rounded-xl overflow-hidden border border-zinc-300 shadow-xs mb-2 group bg-white">
+                              <img src={previewUrl} alt="Preview Bukti" className="max-h-52 w-full object-contain" />
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openLightboxModal(previewUrl);
+                                }}
+                                className="absolute bottom-2 right-2 bg-zinc-900/85 hover:bg-zinc-900 text-white text-[11px] font-semibold px-2.5 py-1 rounded-full flex items-center gap-1 shadow-md"
+                              >
+                                <ZoomIn className="w-3 h-3 text-amber-400" />
+                                <span>Perbesar</span>
+                              </button>
+                            </div>
+                            <p className="text-xs font-semibold text-zinc-800">{selectedFile?.name}</p>
+                          </div>
+                        ) : (
+                          <div className="flex flex-col items-center">
+                            <UploadCloud className="w-6 h-6 text-zinc-400 mb-2" />
+                            <p className="text-xs font-semibold text-zinc-800">Klik untuk memilih bukti transfer e-wallet</p>
+                          </div>
+                        )}
+                      </div>
+
+                      <button
+                        type="submit"
+                        disabled={!selectedFile || isUploading}
+                        className="w-full py-4 bg-zinc-900 hover:bg-zinc-800 active:scale-[0.99] text-white rounded-full text-xs sm:text-sm font-semibold shadow-md transition-all flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer"
+                      >
+                        {isUploading ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            <span>Mengunggah...</span>
+                          </>
+                        ) : (
+                          <>
+                            <span>Kirim Bukti Pembayaran</span>
+                            <ArrowRight className="w-4 h-4" />
+                          </>
+                        )}
+                      </button>
+                    </form>
+                  </div>
+                )}
+
+                {/* TAB 3: CASH (PICKUP DI TOKO) */}
+                {selectedMethod === 'CASH' && (
+                  <div className="bg-white rounded-3xl border border-zinc-200/80 p-6 sm:p-7 shadow-xs space-y-5">
+                    <div>
+                      <h3 className="text-base sm:text-lg font-bold text-zinc-900 tracking-tight">
+                        Bayar Tunai di Kasir Toko
+                      </h3>
+                      <p className="text-xs text-zinc-500 mt-0.5">
+                        Lakukan pembayaran tunai saat mengambil barang langsung di outlet fisik Toko Enstein.
+                      </p>
+                    </div>
+
+                    <div className="p-4 rounded-2xl bg-amber-50/70 border border-amber-200 space-y-2 text-xs text-zinc-700">
+                      <div className="flex items-start gap-2.5">
+                        <Store className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
+                        <div>
+                          <p className="font-bold text-zinc-900">Alamat Outlet Fisik Toko Enstein:</p>
+                          <p className="text-zinc-600 mt-0.5">
+                            Jl. Kertanegara Km. 03, Tanahsari, Kebumen (selatan SD Tanahsari 01), Jawa Tengah.
                           </p>
+                          <p className="text-zinc-500 mt-1">Jam Buka: Senin – Sabtu, 08.00 – 17.00 WIB.</p>
                         </div>
                       </div>
                     </div>
 
-                    {/* Single Confirmation Button */}
-                    <button
-                      type="button"
-                      disabled={isSubmitting}
-                      onClick={handleConfirmPickup}
-                      className="bg-zinc-900 text-white w-full py-4 rounded-full font-semibold hover:bg-zinc-800 transition-all shadow-md active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 cursor-pointer"
-                    >
-                      {isSubmitting ? (
-                        <>
-                          <RefreshCw className="w-4 h-4 animate-spin" />
-                          <span>Mengonfirmasi Pesanan...</span>
-                        </>
-                      ) : (
-                        <>
-                          <span>Konfirmasi Pesanan</span>
-                          <ArrowRight className="w-4 h-4" />
-                        </>
-                      )}
-                    </button>
+                    <div className="bg-zinc-50 p-4 rounded-2xl border border-zinc-200 text-xs space-y-2">
+                      <div className="flex justify-between items-center">
+                        <span className="text-zinc-500">Nomor Pesanan:</span>
+                        <strong className="font-mono text-zinc-900 text-sm">#{order.orderNumber}</strong>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-zinc-500">Jumlah yang Harus Dibayar:</span>
+                        <strong className="text-zinc-900 text-sm font-extrabold">{formatIDR(order.totalAmount)}</strong>
+                      </div>
+                    </div>
+
+                    <div className="pt-2">
+                      <Link
+                        href={`/orders/${order.orderNumber}`}
+                        className="w-full py-4 bg-zinc-900 hover:bg-zinc-800 text-white rounded-full text-xs sm:text-sm font-semibold shadow-md flex items-center justify-center gap-2 transition-all"
+                      >
+                        <span>Lihat Detail Pesanan</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </Link>
+                    </div>
                   </div>
                 )}
-              </div>
 
+                {/* TAB 4: SIMULASI PEMBAYARAN (MODE DEMO) */}
+                {selectedMethod === 'SIMULATED' && isSimulationAllowed && (
+                  <div className="bg-white rounded-3xl border border-violet-200 p-6 sm:p-7 shadow-xs space-y-5">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="text-[10px] font-bold text-violet-700 uppercase tracking-wider bg-violet-50 px-2.5 py-0.5 rounded-full border border-violet-200">
+                          Pengujian &amp; Demo Sistem
+                        </span>
+                        <h3 className="text-base sm:text-lg font-bold text-zinc-900 tracking-tight mt-1.5">
+                          Simulasi Verifikasi Pembayaran Instan
+                        </h3>
+                        <p className="text-xs text-zinc-500 mt-0.5">
+                          Uji alur konfirmasi pembayaran dan pelepasan status pesanan secara langsung tanpa gateway eksternal riil.
+                        </p>
+                      </div>
+                    </div>
 
+                    {simulationResult && (
+                      <div
+                        className={`p-4 rounded-2xl border text-xs sm:text-sm flex items-start gap-2.5 ${
+                          simulationResult.success
+                            ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                            : 'bg-rose-50 border-rose-200 text-rose-900'
+                        }`}
+                      >
+                        {simulationResult.success ? (
+                          <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                        ) : (
+                          <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                        )}
+                        <div>
+                          <p className="font-bold">{simulationResult.success ? 'Berhasil' : 'Peringatan'}</p>
+                          <p className="mt-0.5 leading-relaxed">{simulationResult.message}</p>
+                        </div>
+                      </div>
+                    )}
 
-            </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 pt-2">
+                      <button
+                        type="button"
+                        onClick={() => handleSimulate('SUCCESS')}
+                        disabled={isSimulating}
+                        className="p-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white font-semibold text-xs sm:text-sm shadow-md transition-all flex flex-col items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      >
+                        {isSimulating ? (
+                          <Loader2 className="w-5 h-5 animate-spin" />
+                        ) : (
+                          <>
+                            <CheckCircle2 className="w-5 h-5" />
+                            <span>Simulasi Bayar Berhasil</span>
+                            <span className="text-[10px] font-normal opacity-85">Status menjadi LUNAS</span>
+                          </>
+                        )}
+                      </button>
 
-            {/* Security & Customer Guarantee Notice */}
-            <div className="p-4 rounded-2xl bg-zinc-100/60 border border-zinc-200 flex items-center gap-3 text-xs text-zinc-600">
-              <ShieldCheck className="w-5 h-5 text-emerald-600 shrink-0" />
-              <span>
-                Setiap pembayaran yang masuk diverifikasi langsung oleh Admin Toko Enstein. Stok pesanan Anda dijamin aman hingga status pesanan siap kirim atau siap diambil.
-              </span>
-            </div>
+                      <button
+                        type="button"
+                        onClick={() => handleSimulate('FAILED')}
+                        disabled={isSimulating}
+                        className="p-4 rounded-2xl border-2 border-rose-300 hover:bg-rose-50 active:scale-[0.99] text-rose-700 font-semibold text-xs sm:text-sm transition-all flex flex-col items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      >
+                        {isSimulating ? (
+                          <Loader2 className="w-5 h-5 animate-spin text-rose-600" />
+                        ) : (
+                          <>
+                            <XCircle className="w-5 h-5" />
+                            <span>Simulasi Bayar Gagal</span>
+                            <span className="text-[10px] font-normal opacity-85">Stok tetap aman direservasi</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
 
           </div>
 
-          {/* ================================================================= */}
-          {/* RIGHT COLUMN: PAYMENT SUMMARY (span 4 or 5)                       */}
-          {/* ================================================================= */}
-          <div className="lg:col-span-5 xl:col-span-4">
-            <div className="sticky top-32 bg-zinc-900 text-white rounded-3xl p-8 shadow-xl border border-zinc-800">
+          {/* Right Column (5 cols): Signature Dark Invoice Summary Card (ZERO INTERNAL SCROLLBAR) */}
+          <div className="lg:col-span-5 sticky top-24 space-y-4">
+            <div className="bg-zinc-900 text-white rounded-3xl p-6 sm:p-7 shadow-xl border border-zinc-800">
               
-              {/* Badge & Order No */}
-              <div className="flex items-center justify-between text-xs text-zinc-400">
-                <span className="font-semibold uppercase tracking-wider">Ringkasan Tagihan</span>
-                <span className="font-mono text-zinc-300">#{orderId}</span>
-              </div>
-
-              {/* Title & Value */}
-              <div className="mt-4">
-                <span className="text-zinc-400 text-xs uppercase tracking-wider block font-medium">
-                  Total Tagihan
-                </span>
-                <p className="text-3xl sm:text-4xl font-bold mt-1 tracking-tight text-white font-mono">
-                  {formatRupiah(TOTAL_AMOUNT)}
-                </p>
-              </div>
-
-              {/* Status Badge */}
-              <div className="mt-3 flex items-center gap-2">
+              {/* Header */}
+              <div className="flex items-center justify-between pb-4 border-b border-zinc-800">
+                <div>
+                  <span className="text-[10px] uppercase font-bold tracking-widest text-zinc-400 block">
+                    RINGKASAN TAGIHAN
+                  </span>
+                  <span className="font-mono text-xs text-amber-400 font-bold">
+                    #{order.orderNumber}
+                  </span>
+                </div>
+                
                 <span
-                  className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold ${
-                    paymentStatus === 'PAID'
-                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                      : paymentStatus === 'WAITING_VERIFICATION'
-                      ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
-                      : paymentStatus === 'FAILED'
-                      ? 'bg-red-500/20 text-red-300 border border-red-500/30'
-                      : 'bg-amber-400/20 text-amber-300 border border-amber-400/30'
+                  className={`px-2.5 py-1 rounded-full text-[10px] font-bold border ${
+                    currentPaymentStatus === 'PAID'
+                      ? 'bg-emerald-950 text-emerald-400 border-emerald-800'
+                      : currentPaymentStatus === 'WAITING_VERIFICATION'
+                      ? 'bg-amber-950 text-amber-400 border-amber-800'
+                      : currentPaymentStatus === 'REJECTED'
+                      ? 'bg-rose-950 text-rose-400 border-rose-800'
+                      : 'bg-zinc-800 text-zinc-300 border-zinc-700'
                   }`}
                 >
-                  <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
-                  {paymentStatus === 'PAID'
-                    ? 'Lunas (PAID)'
-                    : paymentStatus === 'WAITING_VERIFICATION'
-                    ? 'Menunggu Verifikasi Admin'
-                    : paymentStatus === 'FAILED'
-                    ? 'Pembayaran Gagal'
+                  {currentPaymentStatus === 'PAID'
+                    ? 'Lunas'
+                    : currentPaymentStatus === 'WAITING_VERIFICATION'
+                    ? 'Menunggu Verifikasi'
+                    : currentPaymentStatus === 'REJECTED'
+                    ? 'Bukti Ditolak'
                     : 'Menunggu Pembayaran'}
                 </span>
               </div>
 
-              {/* Divider */}
-              <hr className="border-zinc-800 my-6" />
+              {/* Total Tagihan Banner */}
+              <div className="py-5 border-b border-zinc-800">
+                <span className="text-xs uppercase tracking-wider text-zinc-400 block">
+                  Total Tagihan Pembayaran
+                </span>
+                <span className="text-3xl font-extrabold text-white tracking-tight mt-1 block">
+                  {formatIDR(order.totalAmount)}
+                </span>
+              </div>
 
-              {/* Brief Order Summary */}
-              <div className="space-y-4">
-                <div className="flex items-center justify-between text-xs text-zinc-400 font-semibold uppercase tracking-wider">
-                  <span>Daftar Produk ({ORDER_ITEMS_MOCK.length} Item)</span>
-                  <span>Subtotal</span>
-                </div>
+              {/* Real Itemized List (Step 2: ZERO INTERNAL SCROLLBAR - No max-h or overflow) */}
+              <div className="py-4 divide-y divide-zinc-800/80">
+                <span className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider block mb-2">
+                  Daftar Produk ({order.items.length} Item)
+                </span>
+                {order.items.map((item) => {
+                  const productName = item.productName || item.name || item.productCode || 'Bahan Konveksi';
+                  const quantity = Number(item.quantity ?? 1);
+                  const subtotal = Number(item.subtotal ?? 0);
+                  let unitPrice = Number(item.unitPrice ?? item.priceAtOrder ?? item.price ?? 0);
+                  if (unitPrice === 0 && subtotal > 0 && quantity > 0) {
+                    unitPrice = Math.round(subtotal / quantity);
+                  }
+                  const unitSymbol = item.unitSymbol || item.unit || item.unitName || 'pcs';
 
-                <div className="space-y-3">
-                  {ORDER_ITEMS_MOCK.map((item) => (
-                    <div key={item.id} className="flex items-start justify-between gap-3 text-xs">
-                      <div className="space-y-0.5 flex-1 pr-2">
-                        <p className="text-zinc-200 font-medium leading-snug line-clamp-2">
-                          {item.name}
+                  return (
+                    <div key={item.id} className="py-2.5 flex items-start justify-between gap-3 text-xs">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-white font-medium text-xs sm:text-sm line-clamp-1">
+                          {productName}
                         </p>
-                        <p className="text-zinc-400 text-[11px]">
-                          {item.quantity} {item.unit} × {formatRupiah(item.unitPrice)}
+                        <p className="text-[11px] text-zinc-400 mt-0.5">
+                          {quantity} {unitSymbol} × {formatIDR(unitPrice)}
                         </p>
                       </div>
-                      <span className="font-mono text-zinc-200 font-semibold shrink-0">
-                        {formatRupiah(item.subtotal)}
+                      <span className="font-bold text-zinc-200 shrink-0">
+                        {formatIDR(subtotal)}
                       </span>
                     </div>
-                  ))}
+                  );
+                })}
+              </div>
+
+              {/* Financial Calculation Breakdown */}
+              <div className="py-4 border-t border-zinc-800 space-y-2 text-xs">
+                <div className="flex justify-between text-zinc-400">
+                  <span>Subtotal Produk</span>
+                  <span className="text-zinc-200 font-semibold">{formatIDR(order.subtotal)}</span>
                 </div>
 
-                {/* Subtotals & Fees */}
-                <div className="pt-3 border-t border-zinc-800/80 space-y-2 text-xs">
-                  <div className="flex items-center justify-between text-zinc-400">
-                    <span>Subtotal Produk</span>
-                    <span className="font-mono text-zinc-200">{formatRupiah(SUBTOTAL_AMOUNT)}</span>
-                  </div>
-                  <div className="flex items-center justify-between text-zinc-400">
-                    <span className="flex items-center gap-1.5">
-                      <Truck className="w-3.5 h-3.5 text-zinc-400" />
-                      <span>Biaya Pengiriman</span>
-                    </span>
-                    <span className="font-mono text-zinc-200">{formatRupiah(DELIVERY_FEE)}</span>
-                  </div>
+                <div className="flex justify-between text-zinc-400">
+                  <span>Biaya Pengiriman</span>
+                  <span className={order.deliveryFee > 0 ? 'text-zinc-200 font-semibold' : 'text-emerald-400 font-semibold'}>
+                    {order.deliveryFee > 0 ? formatIDR(order.deliveryFee) : 'Gratis (Ambil di Toko)'}
+                  </span>
                 </div>
 
-                {/* Total Row */}
-                <div className="pt-3 border-t border-zinc-800 flex items-center justify-between text-sm">
-                  <span className="font-bold text-white">Total Pembayaran</span>
-                  <span className="font-mono font-bold text-base text-amber-400">
-                    {formatRupiah(TOTAL_AMOUNT)}
+                <div className="pt-2 border-t border-zinc-800 flex justify-between items-baseline">
+                  <span className="font-bold text-zinc-200">Total Pembayaran</span>
+                  <span className="text-xl font-extrabold text-amber-400">
+                    {formatIDR(order.totalAmount)}
                   </span>
                 </div>
               </div>
 
-              {/* Secure Wording Box (PRD Spec) */}
-              <div className="mt-8 pt-6 border-t border-zinc-800">
-                <div className="flex items-start gap-3 bg-zinc-800/60 rounded-2xl p-4 border border-zinc-700/50">
-                  <div className="w-8 h-8 rounded-xl bg-zinc-700/60 flex items-center justify-center text-amber-400 shrink-0 mt-0.5">
-                    <Lock className="w-4 h-4" />
-                  </div>
-                  <div className="text-xs space-y-1">
-                    <p className="font-semibold text-zinc-200">
-                      Pembayaran Anda diproses secara aman. Stok saat ini sedang direservasi.
-                    </p>
-                    <p className="text-zinc-400 text-[11px] leading-relaxed">
-                      Sistem mengunci stok fisik material jas hujan Anda agar tidak dibeli pelanggan lain selama batas waktu berlangsung.
-                    </p>
-                  </div>
+              {/* Stock Reservation & Support Reassurance */}
+              <div className="mt-4 pt-4 border-t border-zinc-800 bg-white/5 rounded-2xl p-4 space-y-2 text-[11px] text-zinc-300">
+                <div className="flex items-start gap-2">
+                  <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                  <p className="leading-snug">
+                    Stok material Anda aman direservasi hingga batas waktu berakhir.
+                  </p>
                 </div>
-              </div>
-
-              {/* Help contact */}
-              <div className="mt-4 text-center">
-                <a
-                  href="https://wa.me/6281234567890?text=Halo%20Admin%20Toko%20Enstein,%20saya%20ingin%20konfirmasi%20pembayaran%20pesanan%20"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 text-xs text-zinc-400 hover:text-white transition-colors"
-                >
-                  <HelpCircle className="w-3.5 h-3.5" />
-                  <span>Butuh bantuan pembayaran? Hubungi CS Toko</span>
-                </a>
+                <div className="flex items-start gap-2">
+                  <MessageCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                  <p className="leading-snug">
+                    Butuh bantuan verifikasi? Hubungi WhatsApp{' '}
+                    <a
+                      href="https://wa.me/6283876942484"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-amber-300 underline font-semibold"
+                    >
+                      +62 838 7694 2484
+                    </a>
+                  </p>
+                </div>
               </div>
 
             </div>
           </div>
 
         </div>
+
       </main>
 
-      {/* =====================================================================
-          4. MODERN FOOTER (`bg-white py-16 border-t border-zinc-200`)
-          ===================================================================== */}
-      <footer className="bg-white py-16 border-t border-zinc-200 text-zinc-600 mt-auto">
-        <div className="max-w-7xl mx-auto px-6 sm:px-8 lg:px-12">
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-10 lg:gap-8 pb-12 border-b border-zinc-100">
-            
-            {/* Col 1: Brand & Bio */}
-            <div className="lg:col-span-4 space-y-4">
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-full bg-zinc-100 p-1 flex items-center justify-center shrink-0">
-                  <img
-                    src="/ensteinlogo.png"
-                    alt="Logo Toko Enstein"
-                    width={32}
-                    height={32}
-                    style={{ width: '32px', height: '32px', objectFit: 'contain' }}
-                    className="w-full h-full object-contain"
-                  />
-                </div>
-                <span className="text-lg font-bold tracking-tight text-zinc-900 uppercase">
-                  ENSTEIN<span className="text-amber-500 font-black">STORE</span>
-                </span>
-              </div>
+      {/* 4. Fullscreen Interactive Lightbox Modal */}
+      {lightboxOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex flex-col items-center justify-center p-4 animate-in fade-in duration-200"
+          onClick={closeLightboxModal}
+        >
+          {/* Floating Controls Bar at top */}
+          <div
+            className="absolute top-4 right-4 sm:top-6 sm:right-6 flex items-center gap-2 bg-zinc-900/90 border border-zinc-700/80 rounded-full px-3.5 py-1.5 shadow-xl text-white z-10"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              onClick={() => setLightboxZoomLevel((prev) => (prev === 1 ? 1.5 : 1))}
+              className="px-3 py-1 rounded-full text-xs font-semibold hover:bg-zinc-800 transition-colors flex items-center gap-1.5 cursor-pointer"
+              title="Toggle Zoom"
+            >
+              {lightboxZoomLevel === 1 ? (
+                <>
+                  <ZoomIn className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Perbesar 150%</span>
+                </>
+              ) : (
+                <>
+                  <ZoomOut className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Ukuran Normal 100%</span>
+                </>
+              )}
+            </button>
 
-              <p className="text-xs text-zinc-500 leading-relaxed max-w-sm">
-                Toko Enstein berlokasi di Jl. Kertanegara Km. 03, Tanahsari, Kebumen (selatan SD Tanahsari 01). Penyedia bahan jas hujan (kain PVC, taslan, mika) beserta kancing snap, resleting, dan karet elastis bermutu tinggi.
-              </p>
+            <div className="h-4 w-px bg-zinc-700" />
 
-              <div className="flex items-center gap-2 text-xs font-medium text-zinc-700 pt-1">
-                <ShieldCheck className="w-4 h-4 text-amber-500" />
-                <span>Kualitas Standar Konveksi &amp; Eceran</span>
-              </div>
-            </div>
+            <a
+              href={lightboxSrc}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-3 py-1 rounded-full text-xs font-semibold hover:bg-zinc-800 transition-colors flex items-center gap-1.5"
+            >
+              <ExternalLink className="w-3.5 h-3.5 text-zinc-300" />
+              <span>Buka di Tab Baru</span>
+            </a>
 
-            {/* Col 2: Quick Links */}
-            <div className="lg:col-span-2 space-y-3">
-              <p className="text-xs font-semibold text-zinc-900 uppercase tracking-wider">Navigation</p>
-              <ul className="space-y-2.5 text-xs text-zinc-500">
-                <li><Link href="/" className="hover:text-zinc-900 transition-colors">Home</Link></li>
-                <li><Link href="/#products" className="hover:text-zinc-900 transition-colors">Featured Products</Link></li>
-                <li><Link href="/#new-arrivals" className="hover:text-zinc-900 transition-colors">New Arrivals 2026</Link></li>
-                <li><Link href="/#categories" className="hover:text-zinc-900 transition-colors">5 Main Categories</Link></li>
-                <li><Link href="/#about" className="hover:text-zinc-900 transition-colors">About Us</Link></li>
-              </ul>
-            </div>
+            <div className="h-4 w-px bg-zinc-700" />
 
-            {/* Col 3: Categories */}
-            <div className="lg:col-span-3 space-y-3">
-              <p className="text-xs font-semibold text-zinc-900 uppercase tracking-wider">Product Categories</p>
-              <ul className="space-y-2.5 text-xs text-zinc-500">
-                <li>
-                  <Link href="/products" className="hover:text-zinc-900 transition-colors">
-                    Material Jas Hujan
-                  </Link>
-                </li>
-                <li>
-                  <Link href="/products" className="hover:text-zinc-900 transition-colors">
-                    Resleting
-                  </Link>
-                </li>
-                <li>
-                  <Link href="/products" className="hover:text-zinc-900 transition-colors">
-                    Kancing
-                  </Link>
-                </li>
-                <li>
-                  <Link href="/products" className="hover:text-zinc-900 transition-colors">
-                    Karet
-                  </Link>
-                </li>
-                <li>
-                  <Link href="/products" className="hover:text-zinc-900 transition-colors">
-                    Aksesori
-                  </Link>
-                </li>
-              </ul>
-            </div>
-
-            {/* Col 4: Contact & Hours */}
-            <div className="lg:col-span-3 space-y-3">
-              <p className="text-xs font-semibold text-zinc-900 uppercase tracking-wider">Visit &amp; Contact</p>
-              <ul className="space-y-2.5 text-xs text-zinc-500">
-                <li className="flex items-start gap-2">
-                  <MapPin className="w-3.5 h-3.5 text-zinc-700 shrink-0 mt-0.5" />
-                  <span>Jl. Kertanegara Km. 03, Tanahsari, Kebumen (selatan SD Tanahsari 01), Jawa Tengah</span>
-                </li>
-                <li className="flex items-center gap-2">
-                  <Phone className="w-3.5 h-3.5 text-zinc-700 shrink-0" />
-                  <a
-                    href="https://wa.me/6283876942484"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="font-medium text-zinc-900 hover:text-amber-600 transition-colors"
-                  >
-                    +62 838 7694 2484
-                  </a>
-                </li>
-                <li className="flex items-center gap-2">
-                  <Mail className="w-3.5 h-3.5 text-zinc-700 shrink-0" />
-                  <span>sales@ensteinstore.com</span>
-                </li>
-                <li className="flex items-center gap-2">
-                  <Clock className="w-3.5 h-3.5 text-zinc-700 shrink-0" />
-                  <span>Senin - Sabtu: 08.00 - 17.00 WIB</span>
-                </li>
-              </ul>
-            </div>
-
+            <button
+              type="button"
+              onClick={closeLightboxModal}
+              className="p-1 rounded-full hover:bg-zinc-800 text-zinc-400 hover:text-white transition-colors cursor-pointer"
+              title="Tutup (Esc)"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
 
-          {/* Bottom Copyright */}
-          <div className="pt-8 flex flex-col sm:flex-row items-center justify-between text-xs text-zinc-400 gap-2">
-            <p>© 2026 ENSTEINSTORE (Toko Enstein). All rights reserved.</p>
-            <p>Tugas Akhir Pemrograman Berorientasi Objek &amp; Basis Data Semester 3</p>
+          {/* Center Image Container */}
+          <div
+            className="max-w-4xl max-h-[85vh] w-full flex items-center justify-center overflow-auto p-2"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <img
+              src={lightboxSrc}
+              alt="Bukti Transfer Resolusi Tinggi"
+              style={{ transform: `scale(${lightboxZoomLevel})`, transformOrigin: 'center center' }}
+              className="max-h-[80vh] max-w-full object-contain rounded-2xl shadow-2xl transition-transform duration-200 bg-zinc-950/40"
+            />
           </div>
 
-        </div>
-      </footer>
-
-      {/* =================================================================== */}
-      {/* CONFIRMATION MODAL: WAITING VERIFICATION                            */}
-      {/* =================================================================== */}
-      {modalType === 'WAITING_VERIFICATION' && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-zinc-900/60 backdrop-blur-xs animate-in fade-in duration-200">
-          <div className="bg-white rounded-3xl p-6 sm:p-8 max-w-lg w-full shadow-2xl border border-zinc-100 max-h-[90vh] overflow-y-auto animate-in zoom-in-95 duration-200">
-            
-            {/* Header Icon */}
-            <div className="w-16 h-16 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center mb-5 mx-auto">
-              <Clock className="w-10 h-10 animate-pulse" />
-            </div>
-
-            <div className="text-center">
-              <span className="text-xs uppercase tracking-widest font-bold text-blue-700 bg-blue-50 border border-blue-200 px-3 py-1 rounded-full">
-                {selectedMethod === 'cod' ? 'Pesanan Siap Diambil' : 'Menunggu Verifikasi Admin'}
-              </span>
-              <h3 className="text-2xl font-bold text-zinc-900 mt-3">
-                {selectedMethod === 'cod' ? 'Pesanan Pickup Dikonfirmasi!' : 'Bukti Pembayaran Terkirim!'}
-              </h3>
-              <p className="text-xs text-zinc-500 mt-2 leading-relaxed">
-                {selectedMethod === 'cod'
-                  ? `Pesanan #${orderId} telah kami catat. Silakan kunjungi Toko Enstein di Kebumen untuk melunasi secara tunai dan mengambil pesanan Anda.`
-                  : `Bukti transfer Anda untuk pesanan #${orderId} telah berhasil kami terima. Admin Toko Enstein akan memeriksa mutasi rekening dan memvalidasi pembayaran Anda dalam waktu 1x24 jam kerja.`}
-              </p>
-            </div>
-
-            {/* Proof Snapshot if uploaded */}
-            {uploadPreviewUrl && (
-              <div className="mt-4 p-3 rounded-2xl bg-zinc-50 border border-zinc-200 flex items-center gap-3">
-                <img
-                  src={uploadPreviewUrl}
-                  alt="Bukti Transfer"
-                  className="w-12 h-12 rounded-xl object-cover border border-zinc-200"
-                />
-                <div className="text-xs text-left overflow-hidden">
-                  <p className="font-bold text-zinc-900 truncate">{uploadedFile?.name}</p>
-                  <p className="text-zinc-400">Tersimpan dalam database pembayaran aktif</p>
-                </div>
-              </div>
-            )}
-
-            {/* Status notice */}
-            <div className="mt-4 p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-800 flex items-start gap-2 text-left">
-              <ShieldCheck className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-              <span>
-                <strong>Stok Tetap Aman:</strong> Selama status menunggu verifikasi, reservasi stok barang tetap terjaga dan tidak akan dilepas ke pelanggan lain.
-              </span>
-            </div>
-
-            {/* Action Buttons */}
-            <div className="mt-6 flex flex-col sm:flex-row items-center gap-3">
-              <button
-                type="button"
-                onClick={() => setModalType(null)}
-                className="w-full sm:w-1/2 py-3 px-4 rounded-full text-xs font-semibold text-zinc-700 bg-zinc-100 hover:bg-zinc-200 text-center transition-colors cursor-pointer"
-              >
-                Tutup Jendela
-              </button>
-              <Link
-                href={`/orders/${orderId}`}
-                className="w-full sm:w-1/2 py-3 px-4 rounded-full text-xs font-bold text-white bg-zinc-900 hover:bg-zinc-800 text-center transition-all shadow-md cursor-pointer flex items-center justify-center gap-1.5"
-              >
-                <span>Lihat Status Pesanan</span>
-                <ArrowRight className="w-3.5 h-3.5" />
-              </Link>
-            </div>
-          </div>
+          <p className="text-zinc-400 text-xs mt-3 select-none">
+            Klik area luar gambar atau tekan <kbd className="px-1.5 py-0.5 bg-zinc-800 rounded border border-zinc-700 font-mono text-[10px]">Esc</kbd> untuk menutup
+          </p>
         </div>
       )}
 
-      {/* =================================================================== */}
-      {/* FLOATING FEEDBACK TOAST                                             */}
-      {/* =================================================================== */}
-      {toastMessage && (
-        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2.5 px-4 py-3 rounded-2xl bg-zinc-900 text-white text-xs font-medium shadow-2xl animate-in slide-in-from-bottom-5 duration-300 border border-zinc-700">
-          <Check className="w-4 h-4 text-emerald-400 shrink-0" />
-          <span>{toastMessage}</span>
-        </div>
-      )}
-
+      {/* 5. Global Standardized Footer */}
+      <Footer />
     </div>
   );
 }

@@ -1,5 +1,6 @@
 package com.ensteinstore.controller;
 
+import com.ensteinstore.config.AppProperties;
 import com.ensteinstore.dto.response.PaymentResponse;
 import com.ensteinstore.entity.Payment;
 import com.ensteinstore.entity.User;
@@ -12,6 +13,9 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.UrlResource;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -19,6 +23,10 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.net.MalformedURLException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -30,10 +38,12 @@ public class PaymentController {
 
     private final PaymentService paymentService;
     private final UserRepository userRepository;
+    private final AppProperties appProperties;
 
-    public PaymentController(PaymentService paymentService, UserRepository userRepository) {
+    public PaymentController(PaymentService paymentService, UserRepository userRepository, AppProperties appProperties) {
         this.paymentService = paymentService;
         this.userRepository = userRepository;
+        this.appProperties = appProperties;
     }
 
     @GetMapping("/{orderId}")
@@ -41,6 +51,55 @@ public class PaymentController {
     public ResponseEntity<PaymentResponse> getPaymentStatus(@PathVariable UUID orderId) {
         Payment payment = paymentService.getPaymentByOrderId(orderId);
         return ResponseEntity.ok(PaymentResponse.fromEntity(payment));
+    }
+
+    @GetMapping("/proofs/{filename:.+}")
+    @Operation(summary = "Lihat berkas bukti transfer berdasarkan nama berkas")
+    public ResponseEntity<Resource> getProofByFilename(@PathVariable String filename) {
+        List<Path> candidatePaths = List.of(
+                Paths.get(appProperties.getUpload().getDir(), filename),
+                Paths.get(appProperties.getUpload().getDir(), "payments", filename),
+                Paths.get(appProperties.getUpload().getDir(), "proofs", filename),
+                Paths.get("uploads", filename),
+                Paths.get("uploads", "payments", filename),
+                Paths.get("uploads", "proofs", filename),
+                Paths.get("backend", "uploads", filename),
+                Paths.get("backend", "uploads", "payments", filename),
+                Paths.get("backend", "uploads", "proofs", filename)
+        );
+
+        for (Path path : candidatePaths) {
+            try {
+                Resource resource = new UrlResource(path.toAbsolutePath().normalize().toUri());
+                if (resource.exists() && resource.isReadable()) {
+                    String contentType = "image/jpeg";
+                    String lower = filename.toLowerCase();
+                    if (lower.endsWith(".png")) contentType = "image/png";
+                    else if (lower.endsWith(".webp")) contentType = "image/webp";
+
+                    return ResponseEntity.ok()
+                            .contentType(MediaType.parseMediaType(contentType))
+                            .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + resource.getFilename() + "\"")
+                            .body(resource);
+                }
+            } catch (MalformedURLException ignored) {
+            }
+        }
+
+        return ResponseEntity.notFound().build();
+    }
+
+    @GetMapping("/{orderId}/proof")
+    @Operation(summary = "Unduh / lihat bukti transfer pesanan", description = "Mengambil berkas gambar bukti transfer.")
+    public ResponseEntity<Resource> getPaymentProof(@PathVariable UUID orderId) {
+        Payment payment = paymentService.getPaymentByOrderId(orderId);
+        String proofUrl = payment.getTransferProofUrl();
+        if (proofUrl == null || proofUrl.isBlank()) {
+            return ResponseEntity.notFound().build();
+        }
+
+        String filename = proofUrl.contains("/") ? proofUrl.substring(proofUrl.lastIndexOf('/') + 1) : proofUrl;
+        return getProofByFilename(filename);
     }
 
     @PostMapping(value = "/{orderId}/proof", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)

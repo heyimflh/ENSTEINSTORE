@@ -1144,7 +1144,7 @@ export default function HomePage() {
           {/* Bottom Copyright */}
           <div className="pt-8 flex flex-col sm:flex-row items-center justify-between text-xs text-zinc-400 gap-2">
             <p>© 2026 ENSTEINSTORE (Toko Enstein). All rights reserved.</p>
-            <p>Tugas Akhir Pemrograman Berorientasi Objek &amp; Basis Data Semester 3</p>
+            <p className="text-[11px] text-zinc-500">Penyedia Bahan Jas Hujan &amp; Komponen Konveksi Berkualitas • Kebumen, Jawa Tengah</p>
           </div>
 
         </div>

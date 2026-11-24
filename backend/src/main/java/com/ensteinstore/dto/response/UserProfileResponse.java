@@ -16,7 +16,7 @@ public class UserProfileResponse {
     }
 
     public UserProfileResponse(UUID id, String fullName, String email, String role,
-                               String phone, String address, String city) {
+            String phone, String address, String city) {
         this.id = id;
         this.fullName = fullName;
         this.email = email;

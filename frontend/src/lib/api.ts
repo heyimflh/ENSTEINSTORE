@@ -32,19 +32,58 @@ export class ApiException extends Error {
 }
 
 // ─── Token helpers (localStorage, only called client-side) ──────────────────
+export function isTokenExpired(token: string | null): boolean {
+  if (!token) return true;
+  try {
+    const parts = token.split('.');
+    if (parts.length < 2) return true;
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const jsonPayload = decodeURIComponent(
+      atob(base64)
+        .split('')
+        .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+        .join('')
+    );
+    const parsed = JSON.parse(jsonPayload);
+    if (!parsed.exp) return false;
+    // 5 seconds buffer
+    return parsed.exp * 1000 <= Date.now() + 5000;
+  } catch {
+    return true;
+  }
+}
+
 export function getToken(): string | null {
   if (typeof window === 'undefined') return null;
-  return localStorage.getItem('ensteinstore_jwt');
+  const token =
+    localStorage.getItem('ensteinstore_jwt') ||
+    localStorage.getItem('token') ||
+    localStorage.getItem('ensteinstore_token');
+
+  if (!token) return null;
+
+  if (isTokenExpired(token)) {
+    clearToken();
+    return null;
+  }
+
+  return token;
 }
 
 export function setToken(token: string): void {
-  if (typeof window !== 'undefined') localStorage.setItem('ensteinstore_jwt', token);
+  if (typeof window !== 'undefined') {
+    localStorage.setItem('ensteinstore_jwt', token);
+    localStorage.setItem('token', token);
+  }
 }
 
 export function clearToken(): void {
   if (typeof window !== 'undefined') {
     localStorage.removeItem('ensteinstore_jwt');
+    localStorage.removeItem('token');
+    localStorage.removeItem('ensteinstore_token');
     localStorage.removeItem('ensteinstore_user');
+    localStorage.removeItem('ensteinstore_auth_user');
   }
 }
 
@@ -82,6 +121,14 @@ async function apiFetch<T>(path: string, options: FetchOptions = {}): Promise<T>
         path,
       };
     }
+
+    if (res.status === 401 && !skipAuth) {
+      clearToken();
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('auth:expired', { detail: { path } }));
+      }
+    }
+
     throw new ApiException(errorBody);
   }
 

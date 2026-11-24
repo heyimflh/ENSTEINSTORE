@@ -76,6 +76,9 @@ public class SecurityConfig {
                         // Public catalog read access
                         .requestMatchers(HttpMethod.GET, "/api/products/**", "/api/categories/**", "/api/units/**").permitAll()
 
+                        // Static uploads permitAll for proofs and media assets
+                        .requestMatchers(HttpMethod.GET, "/uploads/**", "/api/payments/proofs/**").permitAll()
+
                         // Auth endpoints
                         .requestMatchers("/api/auth/register", "/api/auth/login").permitAll()
                         .requestMatchers("/api/auth/logout").authenticated()
@@ -84,7 +87,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
 
                         // Customer & Authenticated endpoints
-                        .requestMatchers("/api/me/**", "/api/cart/**", "/api/orders/**", "/api/payments/**").authenticated()
+                        .requestMatchers("/api/me", "/api/me/**", "/api/profile", "/api/profile/**", "/api/cart/**", "/api/orders/**", "/api/payments/**").authenticated()
 
                         // Default any other request
                         .anyRequest().authenticated()

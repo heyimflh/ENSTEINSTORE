@@ -31,7 +31,11 @@ export async function getOrderDetail(idOrNumber: string | number): Promise<Order
 }
 
 export async function cancelMyOrder(idOrNumber: string | number, data: CancelOrderRequest): Promise<OrderDetailResponse> {
-  return api.post<OrderDetailResponse>(`/api/orders/${idOrNumber}/cancel`, data);
+  const payload = {
+    cancellationReason: data.cancellationReason || data.reason || 'Dibatalkan oleh pelanggan',
+    reason: data.reason || data.cancellationReason,
+  };
+  return api.post<OrderDetailResponse>(`/api/orders/${idOrNumber}/cancel`, payload);
 }
 
 // ─── Customer Payment ─────────────────────────────────────────────────────────
@@ -45,8 +49,8 @@ export async function uploadPaymentProof(orderId: string | number, file: File): 
   return api.upload<PaymentResponse>(`/api/payments/${orderId}/proof`, formData);
 }
 
-export async function simulatePayment(orderId: string | number): Promise<PaymentResponse> {
-  return api.post<PaymentResponse>(`/api/payments/${orderId}/simulate`);
+export async function simulatePayment(orderId: string | number, outcome: 'SUCCESS' | 'FAILED' = 'SUCCESS'): Promise<PaymentResponse> {
+  return api.post<PaymentResponse>(`/api/payments/${orderId}/simulate?outcome=${outcome}`);
 }
 
 // ─── Admin Orders ─────────────────────────────────────────────────────────────
@@ -102,4 +106,9 @@ export async function adminCreateOfflineSale(data: OfflineSaleRequest): Promise<
     notes: data.notes,
   };
   return api.post<OfflineSaleResponse>('/api/admin/offline-sales', payload);
+}
+
+// ─── Store Configuration ─────────────────────────────────────────────────────
+export async function getStoreConfig(): Promise<import('../types/api').StoreConfigResponse> {
+  return api.get<import('../types/api').StoreConfigResponse>('/api/store/config');
 }

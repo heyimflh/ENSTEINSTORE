@@ -1,8 +1,8 @@
 /**
  * ENSTEINSTORE — Auth API functions
  */
-import { api, setToken, clearToken } from './api';
-import type { LoginRequest, RegisterRequest, AuthResponse, UserProfileResponse } from '../types/api';
+import { api, setToken, clearToken, getToken } from './api';
+import type { LoginRequest, RegisterRequest, AuthResponse, UserProfileResponse, UpdateProfileRequest, ChangePasswordRequest } from '../types/api';
 
 export async function login(data: LoginRequest): Promise<AuthResponse> {
   const res = await api.post<AuthResponse>('/api/auth/login', data, { skipAuth: true });
@@ -47,8 +47,20 @@ export async function getMyProfile(): Promise<UserProfileResponse> {
   return api.get<UserProfileResponse>('/api/me');
 }
 
+export async function updateMyProfile(data: UpdateProfileRequest): Promise<UserProfileResponse> {
+  return api.put<UserProfileResponse>('/api/me', data);
+}
+
+export async function changeMyPassword(data: ChangePasswordRequest): Promise<{ message: string }> {
+  return api.put<{ message: string }>('/api/me/password', data);
+}
+
 export function getStoredUser(): { id: string; name: string; email: string; role: 'CUSTOMER' | 'ADMIN' } | null {
   if (typeof window === 'undefined') return null;
+  if (!getToken()) {
+    clearToken();
+    return null;
+  }
   const raw = localStorage.getItem('ensteinstore_user');
   if (!raw) return null;
   try { return JSON.parse(raw); } catch { return null; }
@@ -56,5 +68,5 @@ export function getStoredUser(): { id: string; name: string; email: string; role
 
 export function isAuthenticated(): boolean {
   if (typeof window === 'undefined') return false;
-  return !!localStorage.getItem('ensteinstore_jwt');
+  return !!getToken();
 }

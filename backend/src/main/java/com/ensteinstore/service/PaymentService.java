@@ -1,5 +1,6 @@
 package com.ensteinstore.service;
 
+import com.ensteinstore.config.AppProperties;
 import com.ensteinstore.entity.*;
 import com.ensteinstore.entity.enums.OrderStatus;
 import com.ensteinstore.entity.enums.PaymentMethod;
@@ -18,6 +19,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.time.OffsetDateTime;
 import java.util.Arrays;
 import java.util.List;
@@ -41,15 +47,18 @@ public class PaymentService {
     private final OrderRepository orderRepository;
     private final InventoryService inventoryService;
     private final List<PaymentProcessor> paymentProcessors;
+    private final AppProperties appProperties;
 
     public PaymentService(PaymentRepository paymentRepository,
                           OrderRepository orderRepository,
                           InventoryService inventoryService,
-                          List<PaymentProcessor> paymentProcessors) {
+                          List<PaymentProcessor> paymentProcessors,
+                          AppProperties appProperties) {
         this.paymentRepository = paymentRepository;
         this.orderRepository = orderRepository;
         this.inventoryService = inventoryService;
         this.paymentProcessors = paymentProcessors;
+        this.appProperties = appProperties;
     }
 
     /**
@@ -94,15 +103,27 @@ public class PaymentService {
                 ? originalFilename.substring(originalFilename.lastIndexOf('.') + 1).toLowerCase()
                 : "jpg";
 
-        String simulatedProofUrl = String.format("/uploads/payments/%s_%d.%s", orderId, System.currentTimeMillis(), ext);
+        String filename = String.format("%s_%d.%s", orderId, System.currentTimeMillis(), ext);
+        String proofUrl = "/uploads/payments/" + filename;
+
+        try {
+            Path uploadDir = Paths.get(appProperties.getUpload().getDir(), "payments").toAbsolutePath().normalize();
+            Files.createDirectories(uploadDir);
+            Path targetPath = uploadDir.resolve(filename);
+            Files.copy(file.getInputStream(), targetPath, StandardCopyOption.REPLACE_EXISTING);
+            log.info("Saved payment proof file to disk at: {}", targetPath);
+        } catch (IOException ex) {
+            log.error("Gagal menyimpan berkas bukti transfer untuk pesanan {}: {}", orderId, ex.getMessage());
+            throw new FileUploadException("Gagal menyimpan berkas bukti transfer: " + ex.getMessage());
+        }
 
         PaymentProcessor processor = findProcessor(payment.getPaymentMethod());
-        PaymentProcessResult result = processor.process(payment, simulatedProofUrl, user);
+        PaymentProcessResult result = processor.process(payment, proofUrl, user);
 
         payment.setSubmittedAt(OffsetDateTime.now());
         paymentRepository.save(payment);
 
-        log.info("Uploaded payment proof for order {}: {}", orderId, simulatedProofUrl);
+        log.info("Uploaded payment proof for order {}: {}", orderId, proofUrl);
         return result;
     }
 

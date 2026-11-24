@@ -8,6 +8,7 @@
 
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { login as apiLogin, logout as apiLogout, getStoredUser, isAuthenticated } from '../lib/auth-api';
+import { clearToken } from '../lib/api';
 import type { LoginRequest, RegisterRequest } from '../types/api';
 import { register as apiRegister } from '../lib/auth-api';
 
@@ -26,6 +27,7 @@ interface AuthContextValue {
   login: (data: LoginRequest) => Promise<void>;
   register: (data: RegisterRequest) => Promise<void>;
   logout: () => Promise<void>;
+  updateUser: (partial: Partial<AuthUser>) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -35,12 +37,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Restore user from localStorage on mount
+    // Restore user from localStorage on mount only if token is valid and unexpired
     if (isAuthenticated()) {
       const stored = getStoredUser();
-      if (stored) setUser(stored as AuthUser);
+      if (stored) {
+        setUser(stored as AuthUser);
+      } else {
+        clearToken();
+        setUser(null);
+      }
+    } else {
+      clearToken();
+      setUser(null);
     }
     setLoading(false);
+  }, []);
+
+  // Listen for centralized 401 token expiration events
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleAuthExpired = () => {
+      setUser(null);
+    };
+    window.addEventListener('auth:expired', handleAuthExpired);
+    return () => window.removeEventListener('auth:expired', handleAuthExpired);
   }, []);
 
   const login = useCallback(async (data: LoginRequest) => {
@@ -61,6 +81,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
   }, []);
 
+  const updateUser = useCallback((partial: Partial<AuthUser>) => {
+    setUser((prev) => {
+      if (!prev) return null;
+      const updated = { ...prev, ...partial };
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('ensteinstore_user', JSON.stringify(updated));
+      }
+      return updated;
+    });
+  }, []);
+
   return (
     <AuthContext.Provider
       value={{
@@ -71,6 +102,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         login,
         register,
         logout,
+        updateUser,
       }}
     >
       {children}

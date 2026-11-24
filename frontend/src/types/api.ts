@@ -53,7 +53,21 @@ export interface UserProfileResponse {
   fullName: string;
   phone: string;
   role: 'CUSTOMER' | 'ADMIN';
+  address?: string;
+  city?: string;
   createdAt?: string;
+}
+
+export interface UpdateProfileRequest {
+  fullName: string;
+  phone?: string;
+  address?: string;
+  city?: string;
+}
+
+export interface ChangePasswordRequest {
+  currentPassword: string;
+  newPassword: string;
 }
 
 // ─── Category ────────────────────────────────────────────────────────────────
@@ -123,17 +137,25 @@ export interface CartItemResponse {
   id: string;
   productId: string;
   productCode: string;
-  productName: string;
+  name: string;
+  productName?: string;
   image: string;
-  priceAtAdd: number;
+  price: number;
+  priceAtAdd?: number;
+  unitPrice?: number;
   quantity: number;
-  unitName: string;
+  unit: string;
+  unitSymbol?: string;
+  unitName?: string;
   allowDecimal: boolean;
   subtotal: number;
-  stockAvailable: number;
+  availableStock: number;
+  stockAvailable?: number;
+  available?: boolean;
 }
 
 export interface CartResponse {
+  id?: string;
   cartId?: string;
   items: CartItemResponse[];
   totalItems: number;
@@ -179,7 +201,9 @@ export interface CheckoutResponse {
 // ─── Order ───────────────────────────────────────────────────────────────────
 export type OrderStatus =
   | 'PENDING_PAYMENT'
+  | 'PAID'
   | 'PROCESSING'
+  | 'READY'
   | 'READY_FOR_PICKUP'
   | 'SHIPPED'
   | 'COMPLETED'
@@ -189,11 +213,18 @@ export interface OrderItemResponse {
   id: string;
   productId: string;
   productCode: string;
-  productName: string;
+  name: string;
+  productName?: string;
   image: string;
+  productImageUrl?: string;
+  imageUrl?: string;
+  price: number;
+  unitPrice?: number;
+  priceAtOrder?: number;
   quantity: number;
-  unitName: string;
-  unitPrice: number;
+  unit: string;
+  unitSymbol?: string;
+  unitName?: string;
   subtotal: number;
 }
 
@@ -237,11 +268,13 @@ export interface UpdateOrderStatusRequest {
 }
 
 export interface CancelOrderRequest {
-  reason: string;
+  reason?: string;
+  cancellationReason?: string;
 }
 
 // ─── Payment ─────────────────────────────────────────────────────────────────
 export type PaymentStatus =
+  | 'PENDING'
   | 'UNPAID'
   | 'WAITING_VERIFICATION'
   | 'PAID'
@@ -337,4 +370,38 @@ export interface DashboardSummaryResponse {
   sales: DashboardSalesStats;
   stock: DashboardStockStats;
   recentOrders: OrderSummaryResponse[];
+}
+
+// ─── Store Configuration ─────────────────────────────────────────────────────
+export interface BankAccountInfo {
+  bankName: string;
+  bankCode: string;
+  accountNumber: string;
+  accountHolder: string;
+}
+
+export interface EWalletInfo {
+  walletName: string;
+  walletCode: string;
+  accountNumber: string;
+  accountHolder: string;
+  qrCodeUrl?: string;
+}
+
+export interface StoreConfigResponse {
+  storeName: string;
+  owner: string;
+  tagline: string;
+  subtagline: string;
+  phone: string;
+  whatsapp: string;
+  email: string;
+  address: string;
+  hours: string;
+  deliveryFee: number;
+  paymentExpiryHours: number;
+  simulationEnabled: boolean;
+  maxUploadBytes: number;
+  bankAccounts?: BankAccountInfo[];
+  ewallets?: EWalletInfo[];
 }
