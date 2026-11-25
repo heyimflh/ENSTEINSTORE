@@ -1,5 +1,6 @@
 package com.ensteinstore.dto.response;
 
+import java.time.OffsetDateTime;
 import java.util.UUID;
 
 public class UserProfileResponse {
@@ -11,12 +12,18 @@ public class UserProfileResponse {
     private String phone;
     private String address;
     private String city;
+    private OffsetDateTime createdAt;
 
     public UserProfileResponse() {
     }
 
     public UserProfileResponse(UUID id, String fullName, String email, String role,
             String phone, String address, String city) {
+        this(id, fullName, email, role, phone, address, city, null);
+    }
+
+    public UserProfileResponse(UUID id, String fullName, String email, String role,
+            String phone, String address, String city, OffsetDateTime createdAt) {
         this.id = id;
         this.fullName = fullName;
         this.email = email;
@@ -24,6 +31,7 @@ public class UserProfileResponse {
         this.phone = phone;
         this.address = address;
         this.city = city;
+        this.createdAt = createdAt;
     }
 
     public UUID getId() {
@@ -80,5 +88,13 @@ public class UserProfileResponse {
 
     public void setCity(String city) {
         this.city = city;
+    }
+
+    public OffsetDateTime getCreatedAt() {
+        return createdAt;
+    }
+
+    public void setCreatedAt(OffsetDateTime createdAt) {
+        this.createdAt = createdAt;
     }
 }

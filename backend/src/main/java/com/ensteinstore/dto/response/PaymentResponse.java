@@ -17,6 +17,9 @@ public class PaymentResponse {
     private OffsetDateTime submittedAt;
     private OffsetDateTime verifiedAt;
     private String rejectionReason;
+    private UUID orderId;
+    private String orderNumber;
+    private String recipientName;
 
     public PaymentResponse() {
     }
@@ -32,6 +35,23 @@ public class PaymentResponse {
         this.submittedAt = submittedAt;
         this.verifiedAt = verifiedAt;
         this.rejectionReason = rejectionReason;
+    }
+
+    public PaymentResponse(UUID id, PaymentMethod paymentMethod, PaymentStatus status,
+                           BigDecimal amount, String proofOfPaymentUrl, OffsetDateTime submittedAt,
+                           OffsetDateTime verifiedAt, String rejectionReason,
+                           UUID orderId, String orderNumber, String recipientName) {
+        this.id = id;
+        this.paymentMethod = paymentMethod;
+        this.status = status;
+        this.amount = amount;
+        this.proofOfPaymentUrl = proofOfPaymentUrl;
+        this.submittedAt = submittedAt;
+        this.verifiedAt = verifiedAt;
+        this.rejectionReason = rejectionReason;
+        this.orderId = orderId;
+        this.orderNumber = orderNumber;
+        this.recipientName = recipientName;
     }
 
     public UUID getId() {
@@ -98,8 +118,40 @@ public class PaymentResponse {
         this.rejectionReason = rejectionReason;
     }
 
+    public UUID getOrderId() {
+        return orderId;
+    }
+
+    public void setOrderId(UUID orderId) {
+        this.orderId = orderId;
+    }
+
+    public String getOrderNumber() {
+        return orderNumber;
+    }
+
+    public void setOrderNumber(String orderNumber) {
+        this.orderNumber = orderNumber;
+    }
+
+    public String getRecipientName() {
+        return recipientName;
+    }
+
+    public void setRecipientName(String recipientName) {
+        this.recipientName = recipientName;
+    }
+
     public static PaymentResponse fromEntity(com.ensteinstore.entity.Payment p) {
         if (p == null) return null;
+        UUID orderId = null;
+        String orderNumber = null;
+        String recipientName = null;
+        if (p.getOrder() != null) {
+            orderId = p.getOrder().getId();
+            orderNumber = p.getOrder().getOrderNumber();
+            recipientName = p.getOrder().getRecipientName();
+        }
         return new PaymentResponse(
                 p.getId(),
                 p.getPaymentMethod(),
@@ -108,7 +160,10 @@ public class PaymentResponse {
                 p.getProofOfPaymentUrl(),
                 p.getSubmittedAt(),
                 p.getVerifiedAt(),
-                p.getRejectionReason()
+                p.getRejectionReason(),
+                orderId,
+                orderNumber,
+                recipientName
         );
     }
 }

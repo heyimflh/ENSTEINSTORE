@@ -17,6 +17,7 @@ import java.util.UUID;
 
 /**
  * User Profile Service (GET /api/me, PUT /api/me, PUT /api/me/password).
+ * Supports both Customer and Admin roles gracefully.
  */
 @Service
 public class ProfileService {
@@ -53,7 +54,8 @@ public class ProfileService {
                 user.getRole().name(),
                 user.getPhone(),
                 address,
-                city
+                city,
+                user.getCreatedAt()
         );
     }
 
@@ -85,7 +87,8 @@ public class ProfileService {
                 user.getRole().name(),
                 user.getPhone(),
                 address,
-                city
+                city,
+                user.getCreatedAt()
         );
     }
 

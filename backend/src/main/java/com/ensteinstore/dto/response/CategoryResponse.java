@@ -9,16 +9,22 @@ public class CategoryResponse {
     private String slug;
     private String description;
     private long productCount;
+    private Boolean isActive = true;
 
     public CategoryResponse() {
     }
 
     public CategoryResponse(UUID id, String name, String slug, String description, long productCount) {
+        this(id, name, slug, description, productCount, true);
+    }
+
+    public CategoryResponse(UUID id, String name, String slug, String description, long productCount, Boolean isActive) {
         this.id = id;
         this.name = name;
         this.slug = slug;
         this.description = description;
         this.productCount = productCount;
+        this.isActive = isActive != null ? isActive : true;
     }
 
     public UUID getId() {
@@ -59,5 +65,13 @@ public class CategoryResponse {
 
     public void setProductCount(long productCount) {
         this.productCount = productCount;
+    }
+
+    public Boolean getIsActive() {
+        return isActive;
+    }
+
+    public void setIsActive(Boolean isActive) {
+        this.isActive = isActive;
     }
 }

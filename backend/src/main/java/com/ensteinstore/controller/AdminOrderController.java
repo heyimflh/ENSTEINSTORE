@@ -24,7 +24,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/api/admin/orders")
+@RequestMapping({"/api/admin/orders", "/admin/orders", "/api/api/admin/orders"})
 @PreAuthorize("hasRole('ADMIN')")
 @SecurityRequirement(name = "Bearer Authentication")
 @Tag(name = "Admin Orders", description = "Endpoints manajemen pesanan pelanggan untuk administrator")

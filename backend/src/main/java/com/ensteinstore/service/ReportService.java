@@ -1,5 +1,9 @@
 package com.ensteinstore.service;
 
+import com.ensteinstore.dto.response.DailySalesResponse;
+import com.ensteinstore.dto.response.MonthlySalesResponse;
+import com.ensteinstore.dto.response.StockReportResponse;
+import com.ensteinstore.dto.response.TopProductResponse;
 import com.ensteinstore.entity.Product;
 import com.ensteinstore.exporter.CsvReportExporter;
 import com.ensteinstore.repository.ProductRepository;
@@ -35,10 +39,10 @@ public class ReportService {
     }
 
     /**
-     * Daily sales report (PRD §18.2).
+     * Daily sales data (PRD §18.2).
      */
     @Transactional(readOnly = true)
-    public void exportDailySalesReport(LocalDate startDate, LocalDate endDate, OutputStream outputStream) throws IOException {
+    public List<DailySalesResponse> getDailySalesData(LocalDate startDate, LocalDate endDate) {
         String sql = """
             SELECT
                 DATE(o.order_date AT TIME ZONE 'Asia/Jakarta') AS report_date,
@@ -52,26 +56,42 @@ public class ReportService {
             ORDER BY report_date ASC
             """;
 
-        List<String> headers = Arrays.asList("Tanggal", "Total Pesanan", "Pesanan Lunas", "Total Pendapatan (Rp)");
-        List<List<Object>> rows = new ArrayList<>();
-
+        List<DailySalesResponse> list = new ArrayList<>();
         jdbcTemplate.query(sql, rs -> {
-            rows.add(Arrays.asList(
+            list.add(new DailySalesResponse(
                     rs.getString("report_date"),
                     rs.getLong("total_orders"),
                     rs.getLong("paid_orders"),
                     rs.getBigDecimal("revenue")
             ));
         }, startDate, endDate);
+        return list;
+    }
 
+    /**
+     * Daily sales report CSV (PRD §18.2).
+     */
+    @Transactional(readOnly = true)
+    public void exportDailySalesReport(LocalDate startDate, LocalDate endDate, OutputStream outputStream) throws IOException {
+        List<DailySalesResponse> data = getDailySalesData(startDate, endDate);
+        List<String> headers = Arrays.asList("Tanggal", "Total Pesanan", "Pesanan Lunas", "Total Pendapatan (Rp)");
+        List<List<Object>> rows = new ArrayList<>();
+        for (DailySalesResponse item : data) {
+            rows.add(Arrays.asList(
+                    item.getDate(),
+                    item.getTotalOrders(),
+                    item.getPaidOrders(),
+                    item.getRevenue()
+            ));
+        }
         csvReportExporter.export(headers, rows, outputStream);
     }
 
     /**
-     * Monthly sales report (PRD §18.2).
+     * Monthly sales data (PRD §18.2).
      */
     @Transactional(readOnly = true)
-    public void exportMonthlySalesReport(int year, OutputStream outputStream) throws IOException {
+    public List<MonthlySalesResponse> getMonthlySalesData(int year) {
         String sql = """
             SELECT
                 TO_CHAR(o.order_date AT TIME ZONE 'Asia/Jakarta', 'YYYY-MM') AS report_month,
@@ -85,26 +105,42 @@ public class ReportService {
             ORDER BY report_month ASC
             """;
 
-        List<String> headers = Arrays.asList("Bulan", "Total Pesanan", "Pesanan Lunas", "Total Pendapatan (Rp)");
-        List<List<Object>> rows = new ArrayList<>();
-
+        List<MonthlySalesResponse> list = new ArrayList<>();
         jdbcTemplate.query(sql, rs -> {
-            rows.add(Arrays.asList(
+            list.add(new MonthlySalesResponse(
                     rs.getString("report_month"),
                     rs.getLong("total_orders"),
                     rs.getLong("paid_orders"),
                     rs.getBigDecimal("revenue")
             ));
         }, year);
+        return list;
+    }
 
+    /**
+     * Monthly sales report CSV (PRD §18.2).
+     */
+    @Transactional(readOnly = true)
+    public void exportMonthlySalesReport(int year, OutputStream outputStream) throws IOException {
+        List<MonthlySalesResponse> data = getMonthlySalesData(year);
+        List<String> headers = Arrays.asList("Bulan", "Total Pesanan", "Pesanan Lunas", "Total Pendapatan (Rp)");
+        List<List<Object>> rows = new ArrayList<>();
+        for (MonthlySalesResponse item : data) {
+            rows.add(Arrays.asList(
+                    item.getMonth(),
+                    item.getTotalOrders(),
+                    item.getPaidOrders(),
+                    item.getRevenue()
+            ));
+        }
         csvReportExporter.export(headers, rows, outputStream);
     }
 
     /**
-     * Top selling products report (PRD §18.2).
+     * Top selling products data (PRD §18.2).
      */
     @Transactional(readOnly = true)
-    public void exportTopProductsReport(LocalDate startDate, LocalDate endDate, int limit, OutputStream outputStream) throws IOException {
+    public List<TopProductResponse> getTopProductsData(LocalDate startDate, LocalDate endDate, int limit) {
         String sql = """
             SELECT
                 p.product_code,
@@ -127,13 +163,9 @@ public class ReportService {
             LIMIT ?
             """;
 
-        List<String> headers = Arrays.asList(
-                "Kode Produk", "Nama Produk", "Kategori", "Jumlah Terjual", "Satuan", "Total Penjualan (Rp)"
-        );
-        List<List<Object>> rows = new ArrayList<>();
-
+        List<TopProductResponse> list = new ArrayList<>();
         jdbcTemplate.query(sql, rs -> {
-            rows.add(Arrays.asList(
+            list.add(new TopProductResponse(
                     rs.getString("product_code"),
                     rs.getString("product_name"),
                     rs.getString("category_name"),
@@ -142,37 +174,83 @@ public class ReportService {
                     rs.getBigDecimal("total_revenue")
             ));
         }, startDate, endDate, limit);
+        return list;
+    }
 
+    /**
+     * Top selling products report CSV (PRD §18.2).
+     */
+    @Transactional(readOnly = true)
+    public void exportTopProductsReport(LocalDate startDate, LocalDate endDate, int limit, OutputStream outputStream) throws IOException {
+        List<TopProductResponse> data = getTopProductsData(startDate, endDate, limit);
+        List<String> headers = Arrays.asList(
+                "Kode Produk", "Nama Produk", "Kategori", "Jumlah Terjual", "Satuan", "Total Penjualan (Rp)"
+        );
+        List<List<Object>> rows = new ArrayList<>();
+        for (TopProductResponse item : data) {
+            rows.add(Arrays.asList(
+                    item.getProductCode(),
+                    item.getProductName(),
+                    item.getCategoryName(),
+                    item.getTotalSold(),
+                    item.getUnitSymbol(),
+                    item.getTotalRevenue()
+            ));
+        }
         csvReportExporter.export(headers, rows, outputStream);
     }
 
     /**
-     * Current inventory stock report (PRD §18.2).
+     * Current inventory stock data (PRD §18.2).
      */
     @Transactional(readOnly = true)
-    public void exportStockReport(OutputStream outputStream) throws IOException {
+    public List<StockReportResponse> getStockReportData() {
         List<Product> products = productRepository.findAll();
-        List<String> headers = Arrays.asList(
-                "Kode Produk", "Nama Produk", "Kategori", "Stok Fisik", "Terreservasi",
-                "Stok Tersedia", "Satuan", "Harga Satuan (Rp)", "Status Stok"
-        );
-        List<List<Object>> rows = new ArrayList<>();
+        List<StockReportResponse> list = new ArrayList<>();
 
         for (Product p : products) {
             String status = p.getStockOnHand().compareTo(BigDecimal.ZERO) <= 0
                     ? "Habis (Out of Stock)"
                     : (p.isLowStock() ? "Menipis (Low Stock)" : "Tersedia");
 
-            rows.add(Arrays.asList(
+            list.add(new StockReportResponse(
                     p.getProductCode(),
                     p.getName(),
-                    p.getCategory().getName(),
+                    p.getCategory() != null ? p.getCategory().getName() : "-",
                     p.getStockOnHand(),
                     p.getReservedQuantity(),
                     p.getAvailableQuantity(),
-                    p.getUnit().getUnitName(),
+                    p.getUnit() != null ? p.getUnit().getUnitName() : "-",
                     p.getPrice(),
                     status
+            ));
+        }
+        return list;
+    }
+
+    /**
+     * Current inventory stock report CSV (PRD §18.2).
+     */
+    @Transactional(readOnly = true)
+    public void exportStockReport(OutputStream outputStream) throws IOException {
+        List<StockReportResponse> data = getStockReportData();
+        List<String> headers = Arrays.asList(
+                "Kode Produk", "Nama Produk", "Kategori", "Stok Fisik", "Terreservasi",
+                "Stok Tersedia", "Satuan", "Harga Satuan (Rp)", "Status Stok"
+        );
+        List<List<Object>> rows = new ArrayList<>();
+
+        for (StockReportResponse item : data) {
+            rows.add(Arrays.asList(
+                    item.getProductCode(),
+                    item.getProductName(),
+                    item.getCategoryName(),
+                    item.getStockOnHand(),
+                    item.getReservedQuantity(),
+                    item.getAvailableQuantity(),
+                    item.getUnitName(),
+                    item.getPrice(),
+                    item.getStatus()
             ));
         }
 

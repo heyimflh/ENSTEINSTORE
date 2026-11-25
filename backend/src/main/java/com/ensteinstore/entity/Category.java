@@ -48,6 +48,12 @@ public class Category {
 
     @PrePersist
     protected void onCreate() {
+        if (id == null) {
+            id = UUID.randomUUID();
+        }
+        if (isActive == null) {
+            isActive = true;
+        }
         if (createdAt == null) createdAt = OffsetDateTime.now();
         if (updatedAt == null) updatedAt = OffsetDateTime.now();
     }

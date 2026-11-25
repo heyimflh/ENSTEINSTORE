@@ -25,6 +25,14 @@ public class VerifyPaymentRequest {
         this.approved = approved;
     }
 
+    public Boolean getApprove() {
+        return approved;
+    }
+
+    public void setApprove(Boolean approve) {
+        this.approved = approve;
+    }
+
     public String getRejectionReason() {
         return rejectionReason;
     }

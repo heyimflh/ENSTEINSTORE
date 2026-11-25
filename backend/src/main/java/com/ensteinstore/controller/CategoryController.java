@@ -11,7 +11,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
 @RestController
-@RequestMapping("/api/categories")
+@RequestMapping({"/api/categories", "/categories"})
 @Tag(name = "Categories", description = "Endpoints kategori produk Toko Enstein")
 public class CategoryController {
 

@@ -12,7 +12,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 
 @RestController
-@RequestMapping("/api/units")
+@RequestMapping({"/api/units", "/units"})
 @Tag(name = "Units", description = "Endpoints satuan produk (Unit) Toko Enstein")
 public class UnitController {
 

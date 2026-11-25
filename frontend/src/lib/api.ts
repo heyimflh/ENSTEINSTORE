@@ -6,6 +6,35 @@
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
 
+export function buildApiUrl(path: string): string {
+  const rawBase = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080').trim();
+  const base = rawBase.replace(/\/+$/, '');
+  let cleanPath = (path || '').trim();
+  if (!cleanPath.startsWith('/')) {
+    cleanPath = `/${cleanPath}`;
+  }
+
+  // If base already contains /api at the end (e.g. http://localhost:8080/api)
+  if (base.endsWith('/api')) {
+    // If cleanPath also starts with /api/, strip the duplicate /api
+    if (cleanPath.startsWith('/api/')) {
+      cleanPath = cleanPath.slice(4);
+    } else if (cleanPath === '/api') {
+      cleanPath = '';
+    }
+    return `${base}${cleanPath}`;
+  }
+
+  // If base does not end with /api (e.g. http://localhost:8080)
+  // Ensure that /api is prepended if the path doesn't already have it
+  // (unless it's a non-api path like /uploads)
+  if (!cleanPath.startsWith('/api/') && cleanPath !== '/api' && !cleanPath.startsWith('/uploads/')) {
+    cleanPath = `/api${cleanPath}`;
+  }
+
+  return `${base}${cleanPath}`;
+}
+
 // ─── K14 Error Format ───────────────────────────────────────────────────────
 export interface ApiError {
   timestamp: string;
@@ -105,7 +134,8 @@ async function apiFetch<T>(path: string, options: FetchOptions = {}): Promise<T>
     if (token) headers['Authorization'] = `Bearer ${token}`;
   }
 
-  const res = await fetch(`${BASE_URL}${path}`, { ...init, headers });
+  const url = buildApiUrl(path);
+  const res = await fetch(url, { ...init, headers });
 
   if (!res.ok) {
     let errorBody: ApiError;

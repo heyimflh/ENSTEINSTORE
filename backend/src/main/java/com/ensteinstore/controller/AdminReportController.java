@@ -1,5 +1,9 @@
 package com.ensteinstore.controller;
 
+import com.ensteinstore.dto.response.DailySalesResponse;
+import com.ensteinstore.dto.response.MonthlySalesResponse;
+import com.ensteinstore.dto.response.StockReportResponse;
+import com.ensteinstore.dto.response.TopProductResponse;
 import com.ensteinstore.service.ReportService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -7,6 +11,7 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -15,12 +20,13 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.io.IOException;
 import java.time.LocalDate;
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/admin/reports")
 @PreAuthorize("hasRole('ADMIN')")
 @SecurityRequirement(name = "Bearer Authentication")
-@Tag(name = "Admin Reports", description = "Endpoints ekspor laporan keuangan dan inventaris dalam format CSV aman (TC-18)")
+@Tag(name = "Admin Reports", description = "Endpoints analitik bisnis dan ekspor laporan keuangan dan inventaris dalam format CSV aman (TC-18)")
 public class AdminReportController {
 
     private final ReportService reportService;
@@ -28,6 +34,51 @@ public class AdminReportController {
     public AdminReportController(ReportService reportService) {
         this.reportService = reportService;
     }
+
+    // ─── JSON Preview Endpoints ────────────────────────────────────────────────
+
+    @GetMapping("/sales/daily/data")
+    @Operation(summary = "Data analitik penjualan harian (JSON)",
+               description = "Mengambil data analitik penjualan harian berdasarkan rentang tanggal untuk visualisasi chart dan preview tabel.")
+    public ResponseEntity<List<DailySalesResponse>> getDailySalesData(
+            @Parameter(description = "Tanggal mulai (YYYY-MM-DD)")
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
+            @Parameter(description = "Tanggal akhir (YYYY-MM-DD)")
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate) {
+        return ResponseEntity.ok(reportService.getDailySalesData(startDate, endDate));
+    }
+
+    @GetMapping("/sales/monthly/data")
+    @Operation(summary = "Data analitik penjualan bulanan (JSON)",
+               description = "Mengambil data rekapitulasi penjualan bulanan untuk tahun tertentu untuk visualisasi chart dan preview tabel.")
+    public ResponseEntity<List<MonthlySalesResponse>> getMonthlySalesData(
+            @Parameter(description = "Tahun laporan") @RequestParam int year) {
+        return ResponseEntity.ok(reportService.getMonthlySalesData(year));
+    }
+
+    @GetMapping("/products/top/data")
+    @Operation(summary = "Data produk terlaris (JSON)",
+               description = "Mengambil data produk terlaris berdasarkan kuantitas terjual dan pendapatan.")
+    public ResponseEntity<List<TopProductResponse>> getTopProductsData(
+            @Parameter(description = "Tanggal mulai (YYYY-MM-DD)")
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
+            @Parameter(description = "Tanggal akhir (YYYY-MM-DD)")
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate,
+            @Parameter(description = "Batas jumlah produk terlaris")
+            @RequestParam(defaultValue = "10") int limit) {
+        if (startDate == null) startDate = LocalDate.now().minusMonths(1);
+        if (endDate == null) endDate = LocalDate.now();
+        return ResponseEntity.ok(reportService.getTopProductsData(startDate, endDate, limit));
+    }
+
+    @GetMapping("/inventory/stock/data")
+    @Operation(summary = "Data status inventaris stok terkini (JSON)",
+               description = "Mengambil ringkasan data stok fisik, reservasi, dan status ketersediaan seluruh produk.")
+    public ResponseEntity<List<StockReportResponse>> getStockReportData() {
+        return ResponseEntity.ok(reportService.getStockReportData());
+    }
+
+    // ─── CSV Download Endpoints ────────────────────────────────────────────────
 
     @GetMapping("/sales/daily")
     @Operation(summary = "Ekspor laporan penjualan harian (CSV)",

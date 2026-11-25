@@ -37,6 +37,10 @@ public interface ProductRepository extends JpaRepository<Product, UUID>, JpaSpec
 
     long countByCategoryIdAndIsActiveTrue(UUID categoryId);
 
+    long countByCategoryId(UUID categoryId);
+
+    long countByUnitId(UUID unitId);
+
     /**
      * Locks a product row for update (PESSIMISTIC_WRITE) to prevent race conditions (AGENTS.md §4).
      */

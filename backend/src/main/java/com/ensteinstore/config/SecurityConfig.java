@@ -74,17 +74,17 @@ public class SecurityConfig {
                         .requestMatchers("/api/store/config").permitAll()
 
                         // Public catalog read access
-                        .requestMatchers(HttpMethod.GET, "/api/products/**", "/api/categories/**", "/api/units/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/products/**", "/products/**", "/api/categories/**", "/categories/**", "/api/units/**", "/units/**").permitAll()
 
                         // Static uploads permitAll for proofs and media assets
                         .requestMatchers(HttpMethod.GET, "/uploads/**", "/api/payments/proofs/**").permitAll()
 
                         // Auth endpoints
-                        .requestMatchers("/api/auth/register", "/api/auth/login").permitAll()
-                        .requestMatchers("/api/auth/logout").authenticated()
+                        .requestMatchers("/api/auth/register", "/api/auth/login", "/auth/register", "/auth/login").permitAll()
+                        .requestMatchers("/api/auth/logout", "/auth/logout").authenticated()
 
                         // Admin restricted endpoints
-                        .requestMatchers("/api/admin/**").hasRole("ADMIN")
+                        .requestMatchers("/api/admin/**", "/admin/**", "/api/api/admin/**").hasRole("ADMIN")
 
                         // Customer & Authenticated endpoints
                         .requestMatchers("/api/me", "/api/me/**", "/api/profile", "/api/profile/**", "/api/cart/**", "/api/orders/**", "/api/payments/**").authenticated()

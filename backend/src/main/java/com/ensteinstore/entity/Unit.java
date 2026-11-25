@@ -44,6 +44,12 @@ public class Unit {
 
     @PrePersist
     protected void onCreate() {
+        if (id == null) {
+            id = UUID.randomUUID();
+        }
+        if (allowDecimal == null) {
+            allowDecimal = false;
+        }
         if (createdAt == null) createdAt = OffsetDateTime.now();
         if (updatedAt == null) updatedAt = OffsetDateTime.now();
     }

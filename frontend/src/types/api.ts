@@ -75,14 +75,29 @@ export interface CategoryResponse {
   id: string;
   name: string;
   slug: string;
-  description: string;
+  description?: string;
   productCount: number;
+  isActive?: boolean;
   createdAt?: string;
+}
+
+export interface CategoryRequest {
+  name: string;
+  slug?: string;
+  description?: string;
+  isActive?: boolean;
 }
 
 // ─── Unit ────────────────────────────────────────────────────────────────────
 export interface UnitResponse {
   id: string;
+  unitName: string;
+  unitSymbol: string;
+  allowDecimal: boolean;
+  productCount?: number;
+}
+
+export interface UnitRequest {
   unitName: string;
   unitSymbol: string;
   allowDecimal: boolean;
@@ -113,10 +128,14 @@ export interface ProductResponse {
   isNew?: boolean;
   salesCount: number;
   createdAt: string;
+  isActive?: boolean;
+  active?: boolean;
+  unitId?: string;
 }
 
 export interface CreateProductRequest {
   code: string;
+  productCode?: string;
   name: string;
   description: string;
   price: number;
@@ -126,6 +145,7 @@ export interface CreateProductRequest {
   image?: string;
   isFeatured?: boolean;
   isNew?: boolean;
+  isActive?: boolean;
 }
 
 export interface UpdateProductRequest extends Partial<CreateProductRequest> {
@@ -236,7 +256,8 @@ export interface OrderSummaryResponse {
   fulfillmentMethod: string;
   totalAmount: number;
   orderDate: string;
-  recipientName: string;
+  recipientName?: string;
+  customerName?: string;
   paymentStatus: string;
 }
 
@@ -259,6 +280,7 @@ export interface OrderDetailResponse {
   notes?: string;
   items: OrderItemResponse[];
   payment?: PaymentResponse;
+  paymentStatus?: string;
 }
 
 export interface UpdateOrderStatusRequest {
@@ -290,20 +312,34 @@ export interface PaymentResponse {
   submittedAt?: string;
   verifiedAt?: string;
   rejectionReason?: string;
+  orderId?: string;
+  orderNumber?: string;
+  recipientName?: string;
 }
 
 export interface VerifyPaymentRequest {
-  approve: boolean;
+  approved?: boolean;
+  approve?: boolean;
   rejectionReason?: string;
 }
 
 // ─── Inventory ───────────────────────────────────────────────────────────────
+export type StockMovementType =
+  | 'STOCK_IN'
+  | 'SALE'
+  | 'RETURN'
+  | 'ADJUSTMENT'
+  | 'RESERVE'
+  | 'UNRESERVE'
+  | 'FULFILLMENT'
+  | string;
+
 export interface StockMovementResponse {
   id: string;
   productId: string;
   productCode: string;
   productName: string;
-  movementType: string;
+  movementType: StockMovementType;
   quantity: number;
   stockBefore: number;
   stockAfter: number;
@@ -404,4 +440,40 @@ export interface StoreConfigResponse {
   maxUploadBytes: number;
   bankAccounts?: BankAccountInfo[];
   ewallets?: EWalletInfo[];
+}
+
+// ─── Reports & Analytics ─────────────────────────────────────────────────────
+export interface DailySalesResponse {
+  date: string;
+  totalOrders: number;
+  paidOrders: number;
+  revenue: number;
+}
+
+export interface MonthlySalesResponse {
+  month: string;
+  totalOrders: number;
+  paidOrders: number;
+  revenue: number;
+}
+
+export interface TopProductResponse {
+  productCode: string;
+  productName: string;
+  categoryName: string;
+  totalSold: number;
+  unitSymbol: string;
+  totalRevenue: number;
+}
+
+export interface StockReportResponse {
+  productCode: string;
+  productName: string;
+  categoryName: string;
+  stockOnHand: number;
+  reservedQuantity: number;
+  availableQuantity: number;
+  unitName: string;
+  price: number;
+  status: string;
 }

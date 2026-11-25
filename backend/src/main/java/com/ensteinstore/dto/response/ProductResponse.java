@@ -17,6 +17,7 @@ public class ProductResponse {
     private BigDecimal minimumStock;
     private String unit;
     private String unitSymbol;
+    private UUID unitId;
     private boolean allowDecimal;
     private UUID categoryId;
     private String categoryName;
@@ -27,6 +28,7 @@ public class ProductResponse {
     private boolean isNew;
     private BigDecimal salesCount;
     private OffsetDateTime createdAt;
+    private Boolean isActive = true;
 
     public ProductResponse() {
     }
@@ -229,11 +231,27 @@ public class ProductResponse {
         this.createdAt = createdAt;
     }
 
+    public Boolean getIsActive() {
+        return isActive;
+    }
+
+    public void setIsActive(Boolean isActive) {
+        this.isActive = isActive;
+    }
+
+    public UUID getUnitId() {
+        return unitId;
+    }
+
+    public void setUnitId(UUID unitId) {
+        this.unitId = unitId;
+    }
+
     public static ProductResponse fromEntity(com.ensteinstore.entity.Product p) {
         if (p == null) return null;
         boolean isNew = p.getCreatedAt() != null && p.getCreatedAt().isAfter(OffsetDateTime.now().minusDays(14));
         boolean available = p.getAvailableQuantity() != null && p.getAvailableQuantity().compareTo(BigDecimal.ZERO) > 0;
-        return new ProductResponse(
+        ProductResponse res = new ProductResponse(
                 p.getId(),
                 p.getProductCode(),
                 p.getName(),
@@ -256,5 +274,8 @@ public class ProductResponse {
                 BigDecimal.ZERO,
                 p.getCreatedAt()
         );
+        res.setIsActive(p.getIsActive() != null ? p.getIsActive() : true);
+        res.setUnitId(p.getUnit() != null ? p.getUnit().getId() : null);
+        return res;
     }
 }

@@ -5,6 +5,7 @@ import com.ensteinstore.dto.request.UpdateProfileRequest;
 import com.ensteinstore.dto.response.UserProfileResponse;
 import com.ensteinstore.exception.EnsteinException;
 import com.ensteinstore.exception.ErrorCode;
+import com.ensteinstore.exception.UserNotFoundException;
 import com.ensteinstore.security.UserPrincipal;
 import com.ensteinstore.service.ProfileService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -34,7 +35,7 @@ public class ProfileController {
     @Operation(summary = "Mendapatkan profil pengguna aktif", description = "Mengambil data profil dari pengguna yang sedang terautentikasi.")
     public ResponseEntity<UserProfileResponse> getProfile(@AuthenticationPrincipal UserPrincipal principal) {
         if (principal == null) {
-            throw new EnsteinException("Autentikasi diperlukan untuk mengakses resource ini.", HttpStatus.UNAUTHORIZED, ErrorCode.UNAUTHORIZED);
+            throw new UserNotFoundException("Autentikasi diperlukan untuk mengakses resource ini.");
         }
         UserProfileResponse response = profileService.getProfile(principal.getId());
         return ResponseEntity.ok(response);
@@ -45,7 +46,7 @@ public class ProfileController {
     public ResponseEntity<UserProfileResponse> updateProfile(@AuthenticationPrincipal UserPrincipal principal,
                                                              @Valid @RequestBody UpdateProfileRequest request) {
         if (principal == null) {
-            throw new EnsteinException("Autentikasi diperlukan untuk mengakses resource ini.", HttpStatus.UNAUTHORIZED, ErrorCode.UNAUTHORIZED);
+            throw new UserNotFoundException("Autentikasi diperlukan untuk mengakses resource ini.");
         }
         UserProfileResponse response = profileService.updateProfile(principal.getId(), request);
         return ResponseEntity.ok(response);
@@ -56,7 +57,7 @@ public class ProfileController {
     public ResponseEntity<Map<String, String>> changePassword(@AuthenticationPrincipal UserPrincipal principal,
                                                               @Valid @RequestBody ChangePasswordRequest request) {
         if (principal == null) {
-            throw new EnsteinException("Autentikasi diperlukan untuk mengakses resource ini.", HttpStatus.UNAUTHORIZED, ErrorCode.UNAUTHORIZED);
+            throw new UserNotFoundException("Autentikasi diperlukan untuk mengakses resource ini.");
         }
         profileService.changePassword(principal.getId(), request);
         return ResponseEntity.ok(Map.of("message", "Password berhasil diperbarui."));

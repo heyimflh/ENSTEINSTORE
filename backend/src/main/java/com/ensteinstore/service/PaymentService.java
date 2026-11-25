@@ -131,12 +131,14 @@ public class PaymentService {
      * Admin manual verification of payment transfer proof (TC-13, PRD §8.5).
      */
     @Transactional
-    public PaymentProcessResult verifyPayment(UUID orderId, boolean approved, String rejectionReason, Admin admin) {
-        // Idempotency lock
-        Payment payment = paymentRepository.findByOrderIdWithLock(orderId)
-                .orElseThrow(() -> new ResourceNotFoundException("Data pembayaran tidak ditemukan untuk pesanan ID: " + orderId));
+    public PaymentProcessResult verifyPayment(UUID targetId, boolean approved, String rejectionReason, Admin admin) {
+        // Idempotency lock - handles either orderId or paymentId
+        Payment payment = paymentRepository.findByOrderIdWithLock(targetId)
+                .or(() -> paymentRepository.findByIdWithLock(targetId))
+                .orElseThrow(() -> new ResourceNotFoundException("Data pembayaran tidak ditemukan untuk ID atau Pesanan ID: " + targetId));
 
         Order order = payment.getOrder();
+        UUID orderId = order != null ? order.getId() : targetId;
 
         if (payment.getPaymentStatus() == PaymentStatus.PAID) {
             throw new PaymentException("Pembayaran ini sudah pernah disetujui sebelumnya.");
@@ -145,44 +147,44 @@ public class PaymentService {
         if (approved) {
             payment.setPaymentStatus(PaymentStatus.PAID);
             payment.setPaidAt(OffsetDateTime.now());
+            payment.setVerifiedAt(OffsetDateTime.now());
             payment.setVerifiedByAdmin(admin);
 
-            order.setOrderStatus(OrderStatus.PROCESSING);
+            if (order != null) {
+                order.setOrderStatus(OrderStatus.PROCESSING);
+                order.setPaymentStatus(PaymentStatus.PAID);
 
-            // Fulfill reservation into actual sale
-            if (order.getItems() != null) {
-                for (OrderItem item : order.getItems()) {
-                    inventoryService.fulfillReservation(item.getProduct(), item.getQuantity(), order.getId(), admin);
+                // Fulfill reservation into actual sale
+                if (order.getItems() != null) {
+                    for (OrderItem item : order.getItems()) {
+                        inventoryService.fulfillReservation(item.getProduct(), item.getQuantity(), order.getId(), admin);
+                    }
                 }
+                orderRepository.save(order);
             }
 
             paymentRepository.save(payment);
-            orderRepository.save(order);
 
             log.info("Admin {} approved payment for order {}", admin.getId(), orderId);
             return PaymentProcessResult.success(PaymentStatus.PAID, "Pembayaran berhasil diverifikasi. Pesanan sedang diproses.");
         } else {
             payment.setPaymentStatus(PaymentStatus.REJECTED);
-            payment.setRejectionReason(rejectionReason != null ? rejectionReason : "Bukti pembayaran tidak sesuai atau tidak valid.");
+            payment.setRejectionReason(rejectionReason != null && !rejectionReason.isBlank()
+                    ? rejectionReason.trim()
+                    : "Bukti pembayaran tidak sesuai atau tidak valid.");
+            payment.setVerifiedAt(OffsetDateTime.now());
             payment.setVerifiedByAdmin(admin);
 
-            order.setOrderStatus(OrderStatus.CANCELLED);
-            order.setCancellationReason(payment.getRejectionReason());
-            order.setCancelledAt(OffsetDateTime.now());
-
-            // Release reserved stock back to available stock
-            if (order.getItems() != null) {
-                for (OrderItem item : order.getItems()) {
-                    inventoryService.unreserveStock(item.getProduct(), item.getQuantity(), order.getId(),
-                            "Pembayaran ditolak admin: " + payment.getRejectionReason(), admin);
-                }
+            if (order != null) {
+                order.setPaymentStatus(PaymentStatus.REJECTED);
+                // Keep order in PENDING_PAYMENT so customer can re-upload payment proof without releasing reserved stock
+                orderRepository.save(order);
             }
 
             paymentRepository.save(payment);
-            orderRepository.save(order);
 
-            log.info("Admin {} rejected payment for order {}. Reason: {}", admin.getId(), orderId, rejectionReason);
-            return PaymentProcessResult.failed(PaymentStatus.REJECTED, "Pembayaran ditolak. Pesanan dibatalkan dan stok dikembalikan.");
+            log.info("Admin {} rejected payment for order {}. Reason: {}", admin.getId(), orderId, payment.getRejectionReason());
+            return PaymentProcessResult.failed(PaymentStatus.REJECTED, "Bukti transfer ditolak. Pelanggan dapat mengunggah bukti perbaikan.");
         }
     }
 

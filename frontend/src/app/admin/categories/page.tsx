@@ -1,7 +1,27 @@
 'use client';
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { useAuth } from '../../../context/AuthContext';
+import { useAdminLayout } from '@/components/admin/AdminShell';
+import {
+  getAdminCategories,
+  createCategory,
+  updateCategory,
+  toggleCategoryStatus,
+  getAdminUnits,
+  createUnit,
+  updateUnit,
+} from '../../../lib/admin-api';
+import { adminGetPayments } from '../../../lib/orders-api';
+import { ApiException } from '../../../lib/api';
+import type {
+  CategoryResponse,
+  CategoryRequest,
+  UnitResponse,
+  UnitRequest,
+} from '../../../types/api';
 import {
   LayoutDashboard,
   Package,
@@ -10,1446 +30,1295 @@ import {
   Boxes,
   Store,
   BarChart3,
+  Activity,
+  User,
+  LogOut,
+  Menu,
+  X,
   Search,
   Plus,
   Pencil,
-  PowerOff,
-  Check,
+  Power,
+  RotateCcw,
   CheckCircle2,
-  AlertTriangle,
   AlertCircle,
-  X,
-  Filter,
-  ChevronRight,
-  ExternalLink,
-  LogOut,
-  Bell,
-  Calendar,
-  Menu,
-  Eye,
+  AlertTriangle,
   RefreshCw,
-  Info,
+  CreditCard,
   Ruler,
-  FolderTree,
+  Sliders,
+  Check,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 
-// ============================================================================
-// DATA MODELS & TYPES
-// ============================================================================
+function formatIndonesianFullDate(date: Date = new Date()) {
+  return new Intl.DateTimeFormat('id-ID', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  }).format(date);
+}
 
-export interface CategoryItem {
-  id: string;
+// Initial badge color mapping for categories
+const INITIAL_COLORS = [
+  'bg-emerald-50 text-emerald-700 border-emerald-200/80',
+  'bg-blue-50 text-blue-700 border-blue-200/80',
+  'bg-amber-50 text-amber-700 border-amber-200/80',
+  'bg-violet-50 text-violet-700 border-violet-200/80',
+  'bg-rose-50 text-rose-700 border-rose-200/80',
+  'bg-cyan-50 text-cyan-700 border-cyan-200/80',
+];
+
+interface CategoryFormData {
   name: string;
+  slug: string;
   description: string;
-  productCount: number;
   isActive: boolean;
-  createdAt: string;
 }
 
-export interface UnitItem {
-  id: string;
-  name: string;
-  symbol: string;
-  allowDecimal: boolean; // PRD 13.4.5 & 6.3: allow fractional inputs like 2.5
-  productCount: number;
-  exampleUsage: string;
-  createdAt: string;
+interface UnitFormData {
+  unitName: string;
+  unitSymbol: string;
+  allowDecimal: boolean;
 }
-
-// Mock Categories tailored to Toko Enstein rainwear business (PRD 9.3.3 & 13.4.4)
-const INITIAL_CATEGORIES: CategoryItem[] = [
-  {
-    id: 'cat-1',
-    name: 'Material Jas Hujan',
-    description: 'Kain PVC balon, mika transparan, taslan balon, dan oxford waterproof untuk konveksi jas hujan.',
-    productCount: 24,
-    isActive: true,
-    createdAt: '11 Nov 2026',
-  },
-  {
-    id: 'cat-2',
-    name: 'Resleting',
-    description: 'Resleting waterproof zipper, vislon heavy-duty, dan coil halus berbagai ukuran panjang.',
-    productCount: 18,
-    isActive: true,
-    createdAt: '11 Nov 2026',
-  },
-  {
-    id: 'cat-3',
-    name: 'Kancing',
-    description: 'Kancing jepret / snap button plastik polyacetal dan kancing cetik besi anti karat.',
-    productCount: 16,
-    isActive: true,
-    createdAt: '11 Nov 2026',
-  },
-  {
-    id: 'cat-4',
-    name: 'Karet',
-    description: 'Karet elastis elastomeric untuk pinggang celana, pergelangan tangan, dan tudung jas hujan.',
-    productCount: 12,
-    isActive: true,
-    createdAt: '11 Nov 2026',
-  },
-  {
-    id: 'cat-5',
-    name: 'Aksesori',
-    description: 'Seam sealing tape panas, stopper tali, mata ayam / eyelet, dan tali kur elastis.',
-    productCount: 20,
-    isActive: true,
-    createdAt: '11 Nov 2026',
-  },
-  {
-    id: 'cat-6',
-    name: 'Perlengkapan Jahit',
-    description: 'Benang nilon waterproof, jarum jahit tebal nomor 16-18, dan gunting bahan PVC.',
-    productCount: 6,
-    isActive: false, // Inactive example to test status toggling
-    createdAt: '12 Nov 2026',
-  },
-];
-
-// Mock Units (PRD 13.4.5 & 6.3)
-const INITIAL_UNITS: UnitItem[] = [
-  {
-    id: 'unit-1',
-    name: 'Meter',
-    symbol: 'm',
-    allowDecimal: true, // Decimal allowed (e.g. 2.5 m, 10.75 m)
-    productCount: 42,
-    exampleUsage: 'Kain PVC Balon, Karet Elastis, Seam Sealing Tape',
-    createdAt: '11 Nov 2026',
-  },
-  {
-    id: 'unit-2',
-    name: 'Piece',
-    symbol: 'pcs',
-    allowDecimal: false, // Integer only (e.g. 1 pcs, 10 pcs)
-    productCount: 38,
-    exampleUsage: 'Resleting Waterproof, Kancing Snap Besi, Stopper Tali',
-    createdAt: '11 Nov 2026',
-  },
-  {
-    id: 'unit-3',
-    name: 'Roll',
-    symbol: 'roll',
-    allowDecimal: false,
-    productCount: 14,
-    exampleUsage: 'Roll Seam Sealing Tape 100m, Roll Karet Elastis',
-    createdAt: '11 Nov 2026',
-  },
-  {
-    id: 'unit-4',
-    name: 'Pack',
-    symbol: 'pack',
-    allowDecimal: false,
-    productCount: 19,
-    exampleUsage: 'Kancing Snap Plastik Putih (100 pcs/pack), Eyelet pack',
-    createdAt: '11 Nov 2026',
-  },
-  {
-    id: 'unit-5',
-    name: 'Kilogram',
-    symbol: 'kg',
-    allowDecimal: true, // Decimal allowed (e.g. 1.5 kg lem PVC)
-    productCount: 5,
-    exampleUsage: 'Lem PVC Khusus Tambal Jas Hujan, Cairan Sealant',
-    createdAt: '12 Nov 2026',
-  },
-  {
-    id: 'unit-6',
-    name: 'Yard',
-    symbol: 'yd',
-    allowDecimal: true,
-    productCount: 3,
-    exampleUsage: 'Kain Taslan Impor Balon (Satuan Konveksi Ekspor)',
-    createdAt: '14 Nov 2026',
-  },
-];
-
-// ============================================================================
-// MAIN COMPONENT: ADMIN CATEGORIES & UNITS
-// ============================================================================
 
 export default function AdminCategoriesPage() {
-  // Navigation & UI States
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [notificationOpen, setNotificationOpen] = useState(false);
-  const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
+  const router = useRouter();
+  const { user, isAdmin, logout, loading: authLoading } = useAuth();
 
-  // Tab State: 'categories' | 'units'
+  // Active Tab: 'categories' vs 'units'
   const [activeTab, setActiveTab] = useState<'categories' | 'units'>('categories');
 
-  // Datasets
-  const [categories, setCategories] = useState<CategoryItem[]>(INITIAL_CATEGORIES);
-  const [units, setUnits] = useState<UnitItem[]>(INITIAL_UNITS);
+  // Master Data from PostgreSQL
+  const [categories, setCategories] = useState<CategoryResponse[]>([]);
+  const [units, setUnits] = useState<UnitResponse[]>([]);
+  const [pendingVerificationCount, setPendingVerificationCount] = useState<number>(0);
 
-  // Search & Filter States
-  const [searchQuery, setSearchQuery] = useState('');
-  const [categoryStatusFilter, setCategoryStatusFilter] = useState<'ALL' | 'ACTIVE' | 'INACTIVE'>('ALL');
-  const [unitDecimalFilter, setUnitDecimalFilter] = useState<'ALL' | 'DECIMAL' | 'INTEGER'>('ALL');
+  // States
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [dbConnected, setDbConnected] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [toastMsg, setToastMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(
+    null
+  );
+  const { toggleMobile } = useAdminLayout();
 
-  // Slide-out Drawer State
-  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-  const [drawerMode, setDrawerMode] = useState<'CATEGORY' | 'UNIT'>('CATEGORY');
-  const [editingCategory, setEditingCategory] = useState<CategoryItem | null>(null);
-  const [editingUnit, setEditingUnit] = useState<UnitItem | null>(null);
+  // Filter & Search
+  const [search, setSearch] = useState('');
+  const [categoryStatusFilter, setCategoryStatusFilter] = useState<'ALL' | 'ACTIVE' | 'INACTIVE'>(
+    'ALL'
+  );
+  const [unitTypeFilter, setUnitTypeFilter] = useState<'ALL' | 'DECIMAL' | 'INTEGER'>('ALL');
 
-  // Form State: Category
-  const [categoryFormData, setCategoryFormData] = useState({
+  // Drawer (Create & Edit)
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [editingCategory, setEditingCategory] = useState<CategoryResponse | null>(null);
+  const [editingUnit, setEditingUnit] = useState<UnitResponse | null>(null);
+
+  const [categoryForm, setCategoryForm] = useState<CategoryFormData>({
     name: '',
+    slug: '',
     description: '',
     isActive: true,
   });
 
-  // Form State: Unit
-  const [unitFormData, setUnitFormData] = useState({
-    name: '',
-    symbol: '',
+  const [unitForm, setUnitForm] = useState<UnitFormData>({
+    unitName: '',
+    unitSymbol: '',
     allowDecimal: false,
-    exampleUsage: '',
   });
 
-  // Soft Deactivate Modal State
-  const [deactivatingCategory, setDeactivatingCategory] = useState<CategoryItem | null>(null);
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
 
-  // Toast Notification State
-  const [toastMessage, setToastMessage] = useState<{
-    title: string;
-    desc: string;
-    type: 'success' | 'info' | 'warning';
-  } | null>(null);
+  // Status Change Confirmation Modal (Categories)
+  const [confirmModal, setConfirmModal] = useState<{
+    open: boolean;
+    category: CategoryResponse | null;
+    action: 'deactivate' | 'activate';
+  }>({ open: false, category: null, action: 'deactivate' });
 
-  // Auto-dismiss toast
+  // ─── Fetch Categories & Units from Database ────────────────────────────────
+  const fetchAllData = useCallback(
+    async (isManualRefresh = false) => {
+      if (isManualRefresh) setRefreshing(true);
+      else setLoading(true);
+      setError(null);
+
+      try {
+        const [catRes, unitRes, payRes] = await Promise.allSettled([
+          getAdminCategories(),
+          getAdminUnits(),
+          adminGetPayments({ status: 'WAITING_VERIFICATION', size: 1 }),
+        ]);
+
+        let success = true;
+
+        if (catRes.status === 'fulfilled') {
+          setCategories(catRes.value || []);
+        } else {
+          success = false;
+          console.error('Error fetching categories:', catRes.reason);
+        }
+
+        if (unitRes.status === 'fulfilled') {
+          setUnits(unitRes.value || []);
+        } else {
+          success = false;
+          console.error('Error fetching units:', unitRes.reason);
+        }
+
+        if (payRes.status === 'fulfilled') {
+          setPendingVerificationCount(payRes.value.totalElements || 0);
+        }
+
+        setDbConnected(success);
+        if (!success) {
+          setError('Gagal menghubungkan atau memuat data dari database PostgreSQL.');
+        }
+      } catch (err) {
+        console.error('Fetch error:', err);
+        setDbConnected(false);
+        setError('Terjadi kendala saat menyinkronkan data dengan server.');
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    []
+  );
+
   useEffect(() => {
-    if (toastMessage) {
-      const timer = setTimeout(() => setToastMessage(null), 4000);
-      return () => clearTimeout(timer);
-    }
-  }, [toastMessage]);
-
-  // Open Drawer: Add Category
-  const handleOpenAddCategory = () => {
-    setDrawerMode('CATEGORY');
-    setEditingCategory(null);
-    setCategoryFormData({
-      name: '',
-      description: '',
-      isActive: true,
-    });
-    setIsDrawerOpen(true);
-  };
-
-  // Open Drawer: Edit Category
-  const handleOpenEditCategory = (cat: CategoryItem) => {
-    setDrawerMode('CATEGORY');
-    setEditingCategory(cat);
-    setCategoryFormData({
-      name: cat.name,
-      description: cat.description,
-      isActive: cat.isActive,
-    });
-    setIsDrawerOpen(true);
-  };
-
-  // Open Drawer: Add Unit
-  const handleOpenAddUnit = () => {
-    setDrawerMode('UNIT');
-    setEditingUnit(null);
-    setUnitFormData({
-      name: '',
-      symbol: '',
-      allowDecimal: false,
-      exampleUsage: '',
-    });
-    setIsDrawerOpen(true);
-  };
-
-  // Open Drawer: Edit Unit
-  const handleOpenEditUnit = (unit: UnitItem) => {
-    setDrawerMode('UNIT');
-    setEditingUnit(unit);
-    setUnitFormData({
-      name: unit.name,
-      symbol: unit.symbol,
-      allowDecimal: unit.allowDecimal,
-      exampleUsage: unit.exampleUsage,
-    });
-    setIsDrawerOpen(true);
-  };
-
-  // Save Category Handler
-  const handleSaveCategory = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!categoryFormData.name.trim()) {
-      setToastMessage({
-        title: 'Nama Kategori Wajib Diisi',
-        desc: 'Mohon masukkan nama kategori sebelum menyimpan.',
-        type: 'warning',
-      });
+    if (authLoading) return;
+    if (!isAdmin) {
+      router.replace('/auth');
       return;
     }
+    fetchAllData();
+  }, [isAdmin, authLoading, fetchAllData, router]);
 
-    if (editingCategory) {
-      // Update
-      setCategories((prev) =>
-        prev.map((c) =>
-          c.id === editingCategory.id
-            ? {
-                ...c,
-                name: categoryFormData.name,
-                description: categoryFormData.description,
-                isActive: categoryFormData.isActive,
-              }
-            : c
-        )
-      );
-      setToastMessage({
-        title: 'Kategori Diperbarui',
-        desc: `Kategori "${categoryFormData.name}" berhasil disimpan.`,
-        type: 'success',
-      });
-    } else {
-      // Create new
-      const newCat: CategoryItem = {
-        id: `cat-${Date.now().toString().slice(-4)}`,
-        name: categoryFormData.name,
-        description: categoryFormData.description,
-        productCount: 0,
-        isActive: categoryFormData.isActive,
-        createdAt: '17 Nov 2026',
-      };
-      setCategories((prev) => [newCat, ...prev]);
-      setToastMessage({
-        title: 'Kategori Ditambahkan',
-        desc: `Kategori baru "${categoryFormData.name}" berhasil dibuat.`,
-        type: 'success',
-      });
-    }
-    setIsDrawerOpen(false);
-  };
+  // Auto-hide toast notification
+  useEffect(() => {
+    if (!toastMsg) return;
+    const timer = setTimeout(() => setToastMsg(null), 4000);
+    return () => clearTimeout(timer);
+  }, [toastMsg]);
 
-  // Save Unit Handler
-  const handleSaveUnit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!unitFormData.name.trim() || !unitFormData.symbol.trim()) {
-      setToastMessage({
-        title: 'Formulir Belum Lengkap',
-        desc: 'Nama satuan dan simbol satuan wajib diisi.',
-        type: 'warning',
-      });
-      return;
-    }
+  // ─── Tier 1: Summary Statistics (Real DB Counts) ───────────────────────────
+  const stats = useMemo(() => {
+    const totalCategories = categories.length;
+    const activeCategories = categories.filter((c) => c.isActive !== false).length;
+    const totalUnits = units.length;
+    const decimalUnits = units.filter((u) => Boolean(u.allowDecimal)).length;
 
-    if (editingUnit) {
-      // Update
-      setUnits((prev) =>
-        prev.map((u) =>
-          u.id === editingUnit.id
-            ? {
-                ...u,
-                name: unitFormData.name,
-                symbol: unitFormData.symbol,
-                allowDecimal: unitFormData.allowDecimal,
-                exampleUsage: unitFormData.exampleUsage,
-              }
-            : u
-        )
-      );
-      setToastMessage({
-        title: 'Satuan Ukur Diperbarui',
-        desc: `Satuan "${unitFormData.name} (${unitFormData.symbol})" berhasil disimpan. Aturan desimal diperbarui.`,
-        type: 'success',
-      });
-    } else {
-      // Create new
-      const newUnit: UnitItem = {
-        id: `unit-${Date.now().toString().slice(-4)}`,
-        name: unitFormData.name,
-        symbol: unitFormData.symbol,
-        allowDecimal: unitFormData.allowDecimal,
-        productCount: 0,
-        exampleUsage: unitFormData.exampleUsage || 'Produk Baru',
-        createdAt: '17 Nov 2026',
-      };
-      setUnits((prev) => [newUnit, ...prev]);
-      setToastMessage({
-        title: 'Satuan Ukur Ditambahkan',
-        desc: `Satuan "${unitFormData.name} (${unitFormData.symbol})" berhasil didaftarkan ke sistem.`,
-        type: 'success',
-      });
-    }
-    setIsDrawerOpen(false);
-  };
+    return {
+      totalCategories,
+      activeCategories,
+      totalUnits,
+      decimalUnits,
+    };
+  }, [categories, units]);
 
-  // Toggle Category Active Status
-  const handleConfirmToggleCategory = () => {
-    if (!deactivatingCategory) return;
-    const nextStatus = !deactivatingCategory.isActive;
-    setCategories((prev) =>
-      prev.map((c) =>
-        c.id === deactivatingCategory.id ? { ...c, isActive: nextStatus } : c
-      )
-    );
-    setToastMessage({
-      title: nextStatus ? 'Kategori Diaktifkan' : 'Kategori Dinonaktifkan',
-      desc: nextStatus
-        ? `Kategori "${deactivatingCategory.name}" kini dapat dipilih kembali untuk produk baru.`
-        : `Kategori "${deactivatingCategory.name}" dinonaktifkan tanpa menghapus produk terkait.`,
-      type: nextStatus ? 'success' : 'warning',
-    });
-    setDeactivatingCategory(null);
-  };
-
-  // Filtered Categories
+  // ─── Filtered Data ─────────────────────────────────────────────────────────
   const filteredCategories = useMemo(() => {
     return categories.filter((c) => {
-      const matchesSearch =
-        c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        c.description.toLowerCase().includes(searchQuery.toLowerCase());
-      let matchesStatus = true;
-      if (categoryStatusFilter === 'ACTIVE') matchesStatus = c.isActive;
-      if (categoryStatusFilter === 'INACTIVE') matchesStatus = !c.isActive;
-      return matchesSearch && matchesStatus;
+      if (search.trim()) {
+        const q = search.trim().toLowerCase();
+        const nameMatch = c.name?.toLowerCase().includes(q);
+        const descMatch = c.description?.toLowerCase().includes(q);
+        const slugMatch = c.slug?.toLowerCase().includes(q);
+        if (!nameMatch && !descMatch && !slugMatch) return false;
+      }
+      if (categoryStatusFilter === 'ACTIVE' && c.isActive === false) return false;
+      if (categoryStatusFilter === 'INACTIVE' && c.isActive !== false) return false;
+      return true;
     });
-  }, [categories, searchQuery, categoryStatusFilter]);
+  }, [categories, search, categoryStatusFilter]);
 
-  // Filtered Units
   const filteredUnits = useMemo(() => {
     return units.filter((u) => {
-      const matchesSearch =
-        u.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        u.symbol.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        u.exampleUsage.toLowerCase().includes(searchQuery.toLowerCase());
-      let matchesDecimal = true;
-      if (unitDecimalFilter === 'DECIMAL') matchesDecimal = u.allowDecimal;
-      if (unitDecimalFilter === 'INTEGER') matchesDecimal = !u.allowDecimal;
-      return matchesSearch && matchesDecimal;
+      if (search.trim()) {
+        const q = search.trim().toLowerCase();
+        const nameMatch = u.unitName?.toLowerCase().includes(q);
+        const symbolMatch = u.unitSymbol?.toLowerCase().includes(q);
+        if (!nameMatch && !symbolMatch) return false;
+      }
+      if (unitTypeFilter === 'DECIMAL' && !u.allowDecimal) return false;
+      if (unitTypeFilter === 'INTEGER' && u.allowDecimal) return false;
+      return true;
     });
-  }, [units, searchQuery, unitDecimalFilter]);
+  }, [units, search, unitTypeFilter]);
+
+  // ─── Drawer Handlers ───────────────────────────────────────────────────────
+  const openCreateDrawer = () => {
+    setFormErrors({});
+    if (activeTab === 'categories') {
+      setCategoryForm({
+        name: '',
+        slug: '',
+        description: '',
+        isActive: true,
+      });
+      setEditingCategory(null);
+    } else {
+      setUnitForm({
+        unitName: '',
+        unitSymbol: '',
+        allowDecimal: false,
+      });
+      setEditingUnit(null);
+    }
+    setDrawerOpen(true);
+  };
+
+  const openEditCategoryDrawer = (cat: CategoryResponse) => {
+    setFormErrors({});
+    setCategoryForm({
+      name: cat.name,
+      slug: cat.slug || '',
+      description: cat.description || '',
+      isActive: cat.isActive !== false,
+    });
+    setEditingCategory(cat);
+    setDrawerOpen(true);
+  };
+
+  const openEditUnitDrawer = (unit: UnitResponse) => {
+    setFormErrors({});
+    setUnitForm({
+      unitName: unit.unitName,
+      unitSymbol: unit.unitSymbol,
+      allowDecimal: Boolean(unit.allowDecimal),
+    });
+    setEditingUnit(unit);
+    setDrawerOpen(true);
+  };
+
+  // ─── Save Category / Unit ──────────────────────────────────────────────────
+  const handleSaveCategory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormErrors({});
+
+    const errors: Record<string, string> = {};
+    if (!categoryForm.name.trim()) errors.name = 'Nama kategori wajib diisi.';
+
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors);
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const payload: CategoryRequest = {
+        name: categoryForm.name.trim(),
+        slug: categoryForm.slug.trim() || undefined,
+        description: categoryForm.description.trim() || undefined,
+        isActive: categoryForm.isActive,
+      };
+
+      if (editingCategory) {
+        const updated = await updateCategory(editingCategory.id, payload);
+        setCategories((prev) =>
+          prev.map((item) => (item.id === editingCategory.id ? { ...item, ...updated } : item))
+        );
+        setToastMsg({
+          type: 'success',
+          text: `Kategori "${updated.name}" berhasil diperbarui di PostgreSQL.`,
+        });
+      } else {
+        const created = await createCategory(payload);
+        setCategories((prev) => [...prev, created]);
+        setToastMsg({
+          type: 'success',
+          text: `Kategori "${created.name}" berhasil disimpan ke PostgreSQL.`,
+        });
+      }
+
+      setDrawerOpen(false);
+      fetchAllData(true);
+    } catch (err) {
+      if (err instanceof ApiException) {
+        setToastMsg({ type: 'error', text: err.message });
+      } else {
+        setToastMsg({ type: 'error', text: 'Gagal menyimpan kategori ke server.' });
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSaveUnit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormErrors({});
+
+    const errors: Record<string, string> = {};
+    if (!unitForm.unitName.trim()) errors.unitName = 'Nama satuan wajib diisi.';
+    if (!unitForm.unitSymbol.trim()) errors.unitSymbol = 'Simbol satuan wajib diisi.';
+
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors);
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const payload: UnitRequest = {
+        unitName: unitForm.unitName.trim(),
+        unitSymbol: unitForm.unitSymbol.trim(),
+        allowDecimal: unitForm.allowDecimal,
+      };
+
+      if (editingUnit) {
+        const updated = await updateUnit(editingUnit.id, payload);
+        setUnits((prev) =>
+          prev.map((item) => (item.id === editingUnit.id ? { ...item, ...updated } : item))
+        );
+        setToastMsg({
+          type: 'success',
+          text: `Satuan "${updated.unitName}" berhasil diperbarui di PostgreSQL.`,
+        });
+      } else {
+        const created = await createUnit(payload);
+        setUnits((prev) => [...prev, created]);
+        setToastMsg({
+          type: 'success',
+          text: `Satuan "${created.unitName}" berhasil disimpan ke PostgreSQL.`,
+        });
+      }
+
+      setDrawerOpen(false);
+      fetchAllData(true);
+    } catch (err) {
+      if (err instanceof ApiException) {
+        setToastMsg({ type: 'error', text: err.message });
+      } else {
+        setToastMsg({ type: 'error', text: 'Gagal menyimpan satuan ke server.' });
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // ─── Modal Deactivate / Reactivate Category ────────────────────────────────
+  const handleExecuteCategoryStatusChange = async () => {
+    const { category, action } = confirmModal;
+    if (!category) return;
+
+    const nextActive = action === 'activate';
+    setConfirmModal({ open: false, category: null, action: 'deactivate' });
+
+    // Optimistic UI update
+    setCategories((prev) =>
+      prev.map((c) => (c.id === category.id ? { ...c, isActive: nextActive } : c))
+    );
+
+    try {
+      await toggleCategoryStatus(category.id, nextActive);
+      setToastMsg({
+        type: 'success',
+        text: `Kategori "${category.name}" berhasil ${
+          nextActive ? 'diaktifkan kembali' : 'dinonaktifkan'
+        }.`,
+      });
+      fetchAllData(true);
+    } catch (err) {
+      // Rollback
+      setCategories((prev) =>
+        prev.map((c) => (c.id === category.id ? { ...c, isActive: !nextActive } : c))
+      );
+      setToastMsg({
+        type: 'error',
+        text: err instanceof ApiException ? err.message : 'Gagal memperbarui status kategori.',
+      });
+    }
+  };
+
+  if (authLoading || (!isAdmin && !authLoading)) {
+    return (
+      <div className="min-h-screen bg-zinc-950 flex flex-col items-center justify-center gap-3">
+        <RefreshCw className="w-8 h-8 animate-spin text-amber-500" />
+        <p className="text-xs font-semibold text-zinc-400 tracking-wider uppercase">
+          Memverifikasi Otoritas Admin...
+        </p>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-zinc-50 font-sans text-zinc-900 antialiased flex flex-col">
-      {/* =====================================================================
-          1. THE STANDARDIZED ADMIN SIDEBAR
-          (Strictly using established brand header & obsidian palette)
-      ===================================================================== */}
-      {sidebarOpen && (
-        <div
-          onClick={() => setSidebarOpen(false)}
-          className="fixed inset-0 bg-black/60 z-40 md:hidden backdrop-blur-xs transition-opacity"
-        />
-      )}
-
-      <aside
-        className={`w-64 fixed inset-y-0 left-0 h-screen bg-zinc-950 text-zinc-300 border-r border-zinc-900 flex flex-col justify-between z-50 transition-transform duration-300 ease-in-out md:translate-x-0 ${
-          sidebarOpen ? 'translate-x-0' : '-translate-x-full'
-        }`}
-      >
-        {/* TOP BRAND HEADER (h-20 px-6 flex items-center border-b border-zinc-900/50) */}
-        <div className="h-20 px-6 flex items-center justify-between border-b border-zinc-900/50 shrink-0">
-          <div className="flex items-center">
-            {/* Red Geometric Logo */}
-            <div className="w-7 h-7 bg-red-600 rounded flex items-center justify-center text-white font-black text-sm mr-3 transform -skew-x-6 shadow-sm">
-              E
-            </div>
-
-            {/* Brand Name */}
-            <div className="flex items-center">
-              <span className="text-white font-bold tracking-tight text-lg">ENSTEIN</span>
-              <span className="text-amber-500 font-bold tracking-tight text-lg">STORE</span>
-            </div>
-
-            {/* Sleek Admin Badge */}
-            <span className="ml-3 bg-white/10 text-white border border-white/20 text-[10px] font-bold tracking-widest px-2 py-0.5 rounded uppercase backdrop-blur-sm">
-              ADMIN
-            </span>
-          </div>
-
+    <div className="flex-1 flex flex-col min-w-0">
+      {/* Sticky Executive Topbar */}
+      <header className="sticky top-0 z-30 bg-white/90 backdrop-blur-md border-b border-zinc-200/80 h-16 flex items-center justify-between px-5 lg:px-8">
+        <div className="flex items-center gap-3 min-w-0">
           <button
-            onClick={() => setSidebarOpen(false)}
-            className="md:hidden p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-900"
+            onClick={toggleMobile}
+            className="lg:hidden p-2 rounded-xl text-zinc-600 hover:bg-zinc-100"
+            aria-label="Toggle Navigation"
           >
-            <X className="w-5 h-5" />
+            <Menu className="w-5 h-5" />
           </button>
-        </div>
-
-        {/* MIDDLE NAV LINKS */}
-        <div className="px-4 py-6 space-y-1 overflow-y-auto flex-1">
-          <p className="text-xs font-semibold text-zinc-500 tracking-wider uppercase mb-3 px-2">
-            MENU UTAMA
-          </p>
-          <nav className="space-y-1">
-            {/* Dashboard */}
-            <Link
-              href="/admin/dashboard"
-              className="w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-xl text-zinc-400 hover:bg-zinc-900/50 hover:text-zinc-200 transition-colors"
-            >
-              <LayoutDashboard className="w-4 h-4" />
-              <span>Dashboard</span>
-            </Link>
-
-            {/* Products */}
-            <Link
-              href="/admin/products"
-              className="w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-xl text-zinc-400 hover:bg-zinc-900/50 hover:text-zinc-200 transition-colors"
-            >
-              <Package className="w-4 h-4" />
-              <span>Produk</span>
-              <span className="text-[11px] text-zinc-500 font-mono ml-auto">48</span>
-            </Link>
-
-            {/* Categories (ACTIVE) */}
-            <button
-              className="w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-xl bg-zinc-900 text-white shadow-xs transition-all"
-            >
-              <Layers className="w-4 h-4 text-zinc-200" />
-              <span>Kategori &amp; Satuan</span>
-              <span className="text-[11px] text-zinc-400 font-mono ml-auto">
-                {categories.length + units.length}
-              </span>
-            </button>
-
-            {/* Orders */}
-            <Link
-              href="/admin/orders"
-              className="w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-xl text-zinc-400 hover:bg-zinc-900/50 hover:text-zinc-200 transition-colors"
-            >
-              <ShoppingBag className="w-4 h-4" />
-              <span>Pesanan</span>
-              <span className="ml-auto bg-amber-500/20 text-amber-400 border border-amber-500/30 text-[10px] font-bold px-2 py-0.5 rounded-full">
-                4 Baru
-              </span>
-            </Link>
-
-            {/* Inventory */}
-            <Link
-              href="/admin/inventory"
-              className="w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-xl text-zinc-400 hover:bg-zinc-900/50 hover:text-zinc-200 transition-colors"
-            >
-              <Boxes className="w-4 h-4" />
-              <span>Inventaris</span>
-              <span className="ml-auto bg-rose-500/20 text-rose-400 border border-rose-500/30 text-[10px] font-bold px-2 py-0.5 rounded-full">
-                5 Kritis
-              </span>
-            </Link>
-          </nav>
-
-          {/* Section: OPERASIONAL TOKO */}
-          <div className="pt-4">
-            <p className="text-xs font-semibold text-zinc-500 tracking-wider uppercase mb-3 px-2">
-              OPERASIONAL TOKO
-            </p>
-            <nav className="space-y-1">
-              <Link
-                href="/admin/offline"
-                className="w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-xl text-zinc-400 hover:bg-zinc-900/50 hover:text-zinc-200 transition-colors"
-              >
-                <Store className="w-4 h-4" />
-                <span>Penjualan Offline</span>
-                <span className="ml-auto bg-zinc-800 text-zinc-400 border border-zinc-700 text-[10px] font-semibold px-1.5 py-0.5 rounded uppercase">
-                  POS
-                </span>
-              </Link>
-
-              <Link
-                href="/admin/reports"
-                className="w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-xl text-zinc-400 hover:bg-zinc-900/50 hover:text-zinc-200 transition-colors"
-              >
-                <BarChart3 className="w-4 h-4" />
-                <span>Laporan</span>
-                <span className="ml-auto text-[11px] text-zinc-500 font-mono">CSV</span>
-              </Link>
-            </nav>
-          </div>
-        </div>
-
-        {/* BOTTOM PROFILE */}
-        <div className="p-4 border-t border-zinc-900/50 space-y-3 shrink-0">
-          <Link
-            href="/"
-            target="_blank"
-            className="flex items-center justify-between px-3 py-2 text-xs font-medium text-zinc-400 hover:text-white hover:bg-zinc-900/60 rounded-xl transition-all group"
-          >
-            <span className="flex items-center gap-2">
-              <ExternalLink className="w-3.5 h-3.5 text-zinc-500 group-hover:text-zinc-300" />
-              Lihat Toko Publik
-            </span>
-            <ChevronRight className="w-3.5 h-3.5 opacity-60 group-hover:translate-x-0.5 transition-transform" />
-          </Link>
-
-          <div className="flex items-center justify-between bg-zinc-900 p-3 rounded-2xl hover:bg-zinc-800 transition-colors cursor-pointer group">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="relative shrink-0">
-                <div className="w-9 h-9 rounded-full bg-zinc-800 text-white font-bold flex items-center justify-center text-xs ring-1 ring-zinc-700">
-                  PE
-                </div>
-                <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-500 rounded-full ring-2 ring-zinc-950"></span>
+          <div>
+              <div className="flex items-center gap-2 text-xs">
+                <span className="text-zinc-400">Manajemen</span>
+                <span className="text-zinc-300">/</span>
+                <span className="text-zinc-600 font-medium">Kategori & Satuan</span>
+                {dbConnected ? (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200/80 px-2 py-0.5 rounded-full ml-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    Database Terhubung
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-700 bg-rose-50 border border-rose-200/80 px-2 py-0.5 rounded-full ml-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+                    Terputus
+                  </span>
+                )}
               </div>
-              <div className="min-w-0">
-                <p className="text-xs font-semibold text-white truncate">Pak Enstein</p>
-                <p className="text-[11px] text-zinc-400 truncate">Owner &amp; Admin</p>
-              </div>
-            </div>
-
-            <button
-              onClick={() => {
-                setToastMessage({
-                  title: 'Logout Admin',
-                  desc: 'Sesi admin aman. Anda dapat masuk kembali kapan saja.',
-                  type: 'info',
-                });
-              }}
-              title="Keluar dari Panel Admin"
-              className="p-1.5 text-zinc-400 hover:text-rose-400 hover:bg-zinc-800/80 rounded-lg transition-colors"
-            >
-              <LogOut className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      </aside>
-
-      {/* =====================================================================
-          2. MAIN CONTENT AREA (Offset by sidebar width: ml-64)
-      ===================================================================== */}
-      <div className="md:ml-64 flex-1 min-h-screen bg-zinc-50 flex flex-col">
-        {/* TOPBAR */}
-        <header className="h-20 bg-white border-b border-zinc-200 px-6 sm:px-8 flex items-center justify-between sticky top-0 z-30 shadow-xs">
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => setSidebarOpen(true)}
-              className="md:hidden p-2 rounded-xl text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 transition-colors"
-            >
-              <Menu className="w-5 h-5" />
-            </button>
-
-            <div className="flex items-center gap-2 text-sm">
-              <span className="text-zinc-400 font-medium">Manajemen</span>
-              <span className="text-zinc-300">/</span>
-              <span className="text-zinc-900 font-semibold tracking-tight">Kategori &amp; Satuan</span>
-              <span className="hidden sm:inline-flex ml-3 items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                Database Live
-              </span>
+              <h1 className="text-sm lg:text-base font-bold text-zinc-900 truncate">
+                {formatIndonesianFullDate()}
+              </h1>
             </div>
           </div>
 
-          <div className="flex items-center gap-3 sm:gap-4">
-            <div className="hidden lg:flex items-center gap-2 text-xs font-medium text-zinc-500 bg-zinc-50 px-3 py-1.5 rounded-xl border border-zinc-200">
-              <Calendar className="w-3.5 h-3.5 text-zinc-400" />
-              <span>Selasa, 17 Nov 2026</span>
-            </div>
+          <div className="flex items-center gap-2.5">
+            {/* Refresh Button */}
+            <button
+              onClick={() => fetchAllData(true)}
+              disabled={loading || refreshing}
+              className="flex items-center gap-1.5 text-xs font-semibold text-zinc-600 hover:text-zinc-950 bg-zinc-100 hover:bg-zinc-200/80 px-3 py-2 rounded-2xl transition-colors border border-zinc-200/60"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+              <span className="hidden md:inline">Sinkronkan</span>
+            </button>
 
-            {/* Notification Bell */}
-            <div className="relative">
-              <button
-                onClick={() => setNotificationOpen(!notificationOpen)}
-                className="relative p-2.5 text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 rounded-xl transition-all"
-                title="Pemberitahuan Sistem"
-              >
-                <Bell className="w-5 h-5" />
-                <span className="absolute top-2 right-2 w-2.5 h-2.5 bg-rose-500 rounded-full ring-2 ring-white animate-pulse"></span>
-              </button>
-
-              {notificationOpen && (
-                <div className="absolute right-0 mt-2 w-80 bg-white border border-zinc-200 rounded-2xl shadow-xl p-4 z-50 text-left">
-                  <div className="flex items-center justify-between pb-3 border-b border-zinc-100">
-                    <h4 className="font-bold text-sm text-zinc-900">Notifikasi Master Data</h4>
-                    <span className="text-[11px] font-semibold bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">
-                      Tersinkron
-                    </span>
-                  </div>
-                  <p className="text-xs text-zinc-500 mt-2 leading-relaxed">
-                    Seluruh kategori dan konfigurasi desimal satuan ukur (PRD 6.3) berjalan sesuai integritas database PostgreSQL.
-                  </p>
-                  <div className="pt-2 mt-2 border-t border-zinc-100 text-center">
-                    <button
-                      onClick={() => setNotificationOpen(false)}
-                      className="text-xs text-zinc-600 hover:text-zinc-900 font-semibold"
-                    >
-                      Tutup
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Avatar */}
-            <div className="relative">
-              <button
-                onClick={() => setProfileDropdownOpen(!profileDropdownOpen)}
-                className="flex items-center gap-2 p-1 rounded-full hover:ring-2 hover:ring-zinc-300 transition-all"
-              >
-                <div className="w-9 h-9 rounded-full bg-zinc-900 text-white font-bold flex items-center justify-center text-xs shadow-xs">
-                  PE
-                </div>
-              </button>
-            </div>
+            {/* Primary CTA Button */}
+            <button
+              onClick={openCreateDrawer}
+              className="flex items-center gap-2 bg-zinc-900 hover:bg-zinc-800 text-white rounded-full px-5 py-2.5 text-xs sm:text-sm font-semibold shadow-sm transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              <span>{activeTab === 'categories' ? 'Tambah Kategori' : 'Tambah Satuan'}</span>
+            </button>
           </div>
         </header>
 
-        {/* ===================================================================
-            PAGE HEADER & SLEEK TAB SWITCHER
-        =================================================================== */}
-        <div className="bg-white border-b border-zinc-200 px-6 sm:px-8 pt-8 shadow-xs">
-          <div className="max-w-7xl mx-auto w-full">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div>
-                <h1 className="text-2xl sm:text-3xl font-bold text-zinc-900 tracking-tight">
-                  Kategori &amp; Satuan Ukur
-                </h1>
-                <p className="text-sm text-zinc-500 mt-1">
-                  Atur hierarki kategori bahan jas hujan dan definisi satuan kuantitas (termasuk desimal per meter).
-                </p>
-              </div>
-
-              {/* Action Button for currently active tab */}
+        {/* Workspace Container */}
+        <main className="p-5 lg:p-8 max-w-7xl w-full mx-auto space-y-6">
+          {/* Toast Notification */}
+          {toastMsg && (
+            <div
+              className={`p-4 rounded-2xl flex items-center justify-between text-sm border shadow-sm transition-all ${
+                toastMsg.type === 'success'
+                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                  : 'bg-rose-50 text-rose-800 border-rose-200'
+              }`}
+            >
               <div className="flex items-center gap-2.5">
-                <button
-                  onClick={() => {
-                    setToastMessage({
-                      title: 'Data Disinkronkan',
-                      desc: 'Struktur kategori dan satuan berhasil divalidasi ulang.',
-                      type: 'info',
-                    });
-                  }}
-                  className="p-2.5 text-zinc-500 hover:text-zinc-900 bg-zinc-50 border border-zinc-200 hover:bg-zinc-100 rounded-xl shadow-xs transition-colors"
-                  title="Refresh Data"
-                >
-                  <RefreshCw className="w-4 h-4" />
-                </button>
-
-                {activeTab === 'categories' ? (
-                  <button
-                    onClick={handleOpenAddCategory}
-                    className="bg-zinc-900 text-white px-5 py-2.5 rounded-lg flex items-center gap-2 hover:bg-zinc-800 transition-all shadow-xs text-sm font-semibold active:scale-95"
-                  >
-                    <Plus className="w-4 h-4" />
-                    <span>Tambah Kategori</span>
-                  </button>
+                {toastMsg.type === 'success' ? (
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
                 ) : (
-                  <button
-                    onClick={handleOpenAddUnit}
-                    className="bg-zinc-900 text-white px-5 py-2.5 rounded-lg flex items-center gap-2 hover:bg-zinc-800 transition-all shadow-xs text-sm font-semibold active:scale-95"
-                  >
-                    <Plus className="w-4 h-4" />
-                    <span>Tambah Satuan</span>
-                  </button>
+                  <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
                 )}
+                <span className="font-medium">{toastMsg.text}</span>
+              </div>
+              <button
+                onClick={() => setToastMsg(null)}
+                className="p-1 hover:opacity-75 transition-opacity"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
+          {/* Error Banner */}
+          {error && (
+            <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 flex items-center justify-between text-sm">
+              <div className="flex items-center gap-2.5">
+                <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+                <span>{error}</span>
+              </div>
+              <button
+                onClick={() => fetchAllData(true)}
+                className="underline font-semibold text-rose-700 hover:text-rose-900"
+              >
+                Coba lagi
+              </button>
+            </div>
+          )}
+
+          {/* ───────────────────────────────────────────────────────────── */}
+          {/* TIER 1: 4 LIVE SUMMARY STAT CARDS                            */}
+          {/* ───────────────────────────────────────────────────────────── */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            {/* Card 1: Total Kategori */}
+            <div className="bg-white rounded-3xl border border-zinc-200/80 p-5 shadow-xs flex flex-col justify-between">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-xs font-medium text-zinc-500">Total Kategori</span>
+                <div className="w-9 h-9 rounded-2xl bg-zinc-100 text-zinc-800 flex items-center justify-center">
+                  <Layers className="w-4 h-4" />
+                </div>
+              </div>
+              <div>
+                <p className="text-2xl font-bold tracking-tight text-zinc-900">
+                  {stats.totalCategories}
+                </p>
+                <p className="text-xs text-zinc-400 mt-0.5">Klasifikasi material toko</p>
               </div>
             </div>
 
-            {/* SLEEK TAB SWITCHER (flex gap-6 border-b border-zinc-200 mt-6) */}
-            <div className="flex gap-8 mt-6">
+            {/* Card 2: Kategori Aktif */}
+            <div className="bg-white rounded-3xl border border-zinc-200/80 p-5 shadow-xs flex flex-col justify-between">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-xs font-medium text-zinc-500">Kategori Aktif</span>
+                <div className="w-9 h-9 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                  <CheckCircle2 className="w-4 h-4" />
+                </div>
+              </div>
+              <div>
+                <p className="text-2xl font-bold tracking-tight text-zinc-900">
+                  {stats.activeCategories}
+                </p>
+                <p className="text-xs text-emerald-600 font-medium mt-0.5">
+                  Tampil pada etalase toko
+                </p>
+              </div>
+            </div>
+
+            {/* Card 3: Total Satuan Ukur */}
+            <div className="bg-white rounded-3xl border border-zinc-200/80 p-5 shadow-xs flex flex-col justify-between">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-xs font-medium text-zinc-500">Total Satuan Ukur</span>
+                <div className="w-9 h-9 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center">
+                  <Ruler className="w-4 h-4" />
+                </div>
+              </div>
+              <div>
+                <p className="text-2xl font-bold tracking-tight text-zinc-900">
+                  {stats.totalUnits}
+                </p>
+                <p className="text-xs text-blue-600 font-medium mt-0.5">Master satuan unit</p>
+              </div>
+            </div>
+
+            {/* Card 4: Mendukung Desimal */}
+            <div className="bg-white rounded-3xl border border-zinc-200/80 p-5 shadow-xs flex flex-col justify-between">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-xs font-medium text-zinc-500">Mendukung Desimal</span>
+                <div className="w-9 h-9 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center">
+                  <Sliders className="w-4 h-4" />
+                </div>
+              </div>
+              <div>
+                <p className="text-2xl font-bold tracking-tight text-zinc-900">
+                  {stats.decimalUnits}
+                </p>
+                <p className="text-xs text-amber-600 font-medium mt-0.5">
+                  Contoh: Meter (0.5 m, 2.5 m)
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* ───────────────────────────────────────────────────────────── */}
+          {/* TIER 2: TAB SWITCHER & FILTER/SEARCH TOOLBAR                 */}
+          {/* ───────────────────────────────────────────────────────────── */}
+          <div className="bg-white rounded-3xl border border-zinc-200/80 p-4 lg:p-5 shadow-xs flex flex-col md:flex-row items-center justify-between gap-4">
+            {/* Left: Segmented Tabs */}
+            <div className="flex items-center bg-zinc-100 p-1 rounded-2xl border border-zinc-200/60 w-full md:w-auto">
               <button
                 onClick={() => {
                   setActiveTab('categories');
-                  setSearchQuery('');
+                  setSearch('');
                 }}
-                className={`flex items-center gap-2.5 pb-4 text-sm font-semibold transition-all cursor-pointer relative ${
+                className={`flex-1 md:flex-initial px-5 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-2 ${
                   activeTab === 'categories'
-                    ? 'border-b-2 border-zinc-900 text-zinc-900 font-bold'
-                    : 'text-zinc-500 hover:text-zinc-700'
+                    ? 'bg-white text-zinc-950 shadow-xs'
+                    : 'text-zinc-500 hover:text-zinc-900'
                 }`}
               >
-                <FolderTree className="w-4 h-4" />
+                <Layers className="w-4 h-4" />
                 <span>Kategori Produk</span>
-                <span className="text-xs px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-600 font-mono">
-                  {categories.length}
+                <span className="bg-zinc-200 text-zinc-700 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full">
+                  {stats.totalCategories}
                 </span>
               </button>
 
               <button
                 onClick={() => {
                   setActiveTab('units');
-                  setSearchQuery('');
+                  setSearch('');
                 }}
-                className={`flex items-center gap-2.5 pb-4 text-sm font-semibold transition-all cursor-pointer relative ${
+                className={`flex-1 md:flex-initial px-5 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-2 ${
                   activeTab === 'units'
-                    ? 'border-b-2 border-zinc-900 text-zinc-900 font-bold'
-                    : 'text-zinc-500 hover:text-zinc-700'
+                    ? 'bg-white text-zinc-950 shadow-xs'
+                    : 'text-zinc-500 hover:text-zinc-900'
                 }`}
               >
                 <Ruler className="w-4 h-4" />
                 <span>Satuan Ukur</span>
-                <span className="text-xs px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-600 font-mono">
-                  {units.length}
+                <span className="bg-zinc-200 text-zinc-700 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full">
+                  {stats.totalUnits}
                 </span>
               </button>
             </div>
-          </div>
-        </div>
 
-        {/* ===================================================================
-            MAIN CONTENT CANVAS
-        =================================================================== */}
-        <main className="p-6 sm:p-8 space-y-6 max-w-7xl mx-auto w-full flex-1">
-          {/* =================================================================
-              3. CATEGORIES TABLE TAB
-          ================================================================= */}
-          {activeTab === 'categories' && (
-            <div className="space-y-6 animate-in fade-in duration-200">
-              {/* Category Filter Bar */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div className="relative w-full sm:w-72">
-                  <Search className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-                  <input
-                    type="text"
-                    placeholder="Cari nama atau deskripsi kategori..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full bg-white border border-zinc-200 rounded-lg pl-10 pr-4 py-2 text-xs text-zinc-900 placeholder:text-zinc-400 focus:outline-hidden focus:ring-2 focus:ring-zinc-900 transition-all shadow-xs"
-                  />
-                  {searchQuery && (
-                    <button
-                      onClick={() => setSearchQuery('')}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                </div>
-
-                <div className="flex items-center gap-2.5">
-                  <div className="relative">
-                    <select
-                      value={categoryStatusFilter}
-                      onChange={(e) => setCategoryStatusFilter(e.target.value as any)}
-                      className="appearance-none bg-white border border-zinc-200 rounded-lg px-4 py-2 pr-9 text-xs font-semibold text-zinc-700 hover:border-zinc-300 focus:outline-hidden focus:ring-2 focus:ring-zinc-900 shadow-xs cursor-pointer transition-colors"
-                    >
-                      <option value="ALL">Semua Status</option>
-                      <option value="ACTIVE">Aktif Saja</option>
-                      <option value="INACTIVE">Nonaktif Saja</option>
-                    </select>
-                    <Filter className="w-3.5 h-3.5 text-zinc-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                  </div>
-                </div>
+            {/* Right: Search Input + Status/Type Filter */}
+            <div className="flex items-center gap-2.5 w-full md:w-auto justify-end">
+              <div className="relative flex-1 md:w-64">
+                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                <input
+                  type="text"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder={
+                    activeTab === 'categories'
+                      ? 'Cari nama atau deskripsi kategori...'
+                      : 'Cari nama satuan atau simbol...'
+                  }
+                  className="w-full pl-10 pr-9 py-2 text-xs sm:text-sm bg-zinc-50 border border-zinc-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-zinc-900 focus:bg-white placeholder:text-zinc-400"
+                />
+                {search && (
+                  <button
+                    onClick={() => setSearch('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
               </div>
 
-              {/* The Categories Table */}
-              <div className="bg-white border border-zinc-200 rounded-2xl shadow-xs overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs border-collapse">
-                    <thead>
-                      <tr className="bg-zinc-50 border-b border-zinc-200 text-zinc-500 text-xs uppercase tracking-wider font-semibold">
-                        <th className="py-4 px-6">NAMA KATEGORI</th>
-                        <th className="py-4 px-6">DESKRIPSI</th>
-                        <th className="py-4 px-6 text-center">TOTAL PRODUK</th>
-                        <th className="py-4 px-6">STATUS</th>
-                        <th className="py-4 px-6 text-right">AKSI</th>
+              {/* Status/Type Filter Dropdown */}
+              {activeTab === 'categories' ? (
+                <div className="text-xs bg-zinc-50 border border-zinc-200 px-3 py-2 rounded-2xl shrink-0">
+                  <select
+                    value={categoryStatusFilter}
+                    onChange={(e) =>
+                      setCategoryStatusFilter(e.target.value as 'ALL' | 'ACTIVE' | 'INACTIVE')
+                    }
+                    className="bg-transparent font-semibold text-zinc-800 focus:outline-none cursor-pointer"
+                  >
+                    <option value="ALL">Semua Status</option>
+                    <option value="ACTIVE">Hanya Aktif</option>
+                    <option value="INACTIVE">Hanya Nonaktif</option>
+                  </select>
+                </div>
+              ) : (
+                <div className="text-xs bg-zinc-50 border border-zinc-200 px-3 py-2 rounded-2xl shrink-0">
+                  <select
+                    value={unitTypeFilter}
+                    onChange={(e) =>
+                      setUnitTypeFilter(e.target.value as 'ALL' | 'DECIMAL' | 'INTEGER')
+                    }
+                    className="bg-transparent font-semibold text-zinc-800 focus:outline-none cursor-pointer"
+                  >
+                    <option value="ALL">Semua Satuan</option>
+                    <option value="DECIMAL">Bisa Desimal</option>
+                    <option value="INTEGER">Hanya Bilangan Bulat</option>
+                  </select>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ───────────────────────────────────────────────────────────── */}
+          {/* TIER 3A: CATEGORIES DATA TABLE (WHEN TAB === CATEGORIES)      */}
+          {/* ───────────────────────────────────────────────────────────── */}
+          {activeTab === 'categories' && (
+            <div className="bg-white rounded-3xl border border-zinc-200/80 shadow-xs overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs sm:text-sm">
+                  <thead>
+                    <tr className="border-b border-zinc-200/80 bg-zinc-50/80 text-zinc-500 text-[11px] uppercase tracking-wider font-semibold">
+                      <th className="py-4 px-5">Nama Kategori</th>
+                      <th className="py-4 px-5">Deskripsi</th>
+                      <th className="py-4 px-4 text-center">Total Produk</th>
+                      <th className="py-4 px-4 text-center">Status</th>
+                      <th className="py-4 px-5 text-right">Aksi</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-100">
+                    {loading ? (
+                      <tr>
+                        <td colSpan={5} className="py-16 text-center text-zinc-400">
+                          <div className="flex flex-col items-center justify-center gap-2">
+                            <RefreshCw className="w-6 h-6 animate-spin text-zinc-300" />
+                            <span className="text-xs">Memuat kategori dari database...</span>
+                          </div>
+                        </td>
                       </tr>
-                    </thead>
-                    <tbody className="divide-y divide-zinc-100 text-zinc-700">
-                      {filteredCategories.length > 0 ? (
-                        filteredCategories.map((cat) => (
+                    ) : filteredCategories.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="py-16 text-center">
+                          <div className="max-w-xs mx-auto space-y-2 text-zinc-400">
+                            <Layers className="w-10 h-10 mx-auto text-zinc-300" />
+                            <p className="font-semibold text-zinc-700 text-sm">
+                              Tidak ada kategori yang cocok
+                            </p>
+                            <p className="text-xs">
+                              Coba sesuaikan kata kunci pencarian atau buat kategori baru.
+                            </p>
+                          </div>
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredCategories.map((cat, idx) => {
+                        const initialChar = cat.name ? cat.name.charAt(0).toUpperCase() : 'K';
+                        const colorClass = INITIAL_COLORS[idx % INITIAL_COLORS.length];
+                        const isActive = cat.isActive !== false;
+
+                        return (
                           <tr
                             key={cat.id}
                             className="hover:bg-zinc-50/70 transition-colors group"
                           >
                             {/* Nama Kategori */}
-                            <td className="py-4 px-6 font-semibold text-zinc-900 whitespace-nowrap">
-                              <div className="flex items-center gap-2.5">
-                                <span className="w-8 h-8 rounded-lg bg-zinc-100 flex items-center justify-center text-zinc-700 font-bold text-xs shrink-0 border border-zinc-200">
-                                  {cat.name.slice(0, 1)}
-                                </span>
-                                <div>
-                                  <span className="block text-zinc-900 font-semibold group-hover:text-zinc-950">
+                            <td className="py-4 px-5">
+                              <div className="flex items-center gap-3">
+                                <div
+                                  className={`w-9 h-9 rounded-2xl flex items-center justify-center font-bold text-sm border shrink-0 ${colorClass}`}
+                                >
+                                  {initialChar}
+                                </div>
+                                <div className="min-w-0">
+                                  <p className="font-bold text-zinc-900 group-hover:text-amber-600 transition-colors truncate">
                                     {cat.name}
-                                  </span>
-                                  <span className="text-[10px] text-zinc-400 font-mono">
-                                    ID: {cat.id}
-                                  </span>
+                                  </p>
+                                  <p className="text-[10px] text-zinc-400 font-mono">
+                                    Slug: {cat.slug}
+                                  </p>
                                 </div>
                               </div>
                             </td>
 
                             {/* Deskripsi */}
-                            <td className="py-4 px-6 text-zinc-500 max-w-sm">
-                              <p className="line-clamp-2 text-xs leading-relaxed">
-                                {cat.description || '-'}
+                            <td className="py-4 px-5 text-zinc-600 max-w-md">
+                              <p className="truncate text-xs">
+                                {cat.description || (
+                                  <span className="text-zinc-300 italic">
+                                    Belum ada deskripsi kategori.
+                                  </span>
+                                )}
                               </p>
                             </td>
 
                             {/* Total Produk */}
-                            <td className="py-4 px-6 text-center whitespace-nowrap">
-                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-zinc-100 text-zinc-800 border border-zinc-200 font-mono">
+                            <td className="py-4 px-4 text-center">
+                              <span className="inline-block bg-zinc-100 text-zinc-800 font-semibold text-xs px-2.5 py-1 rounded-full">
                                 {cat.productCount} Produk
                               </span>
                             </td>
 
                             {/* Status */}
-                            <td className="py-4 px-6 whitespace-nowrap">
-                              {cat.isActive ? (
-                                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                            <td className="py-4 px-4 text-center">
+                              {isActive ? (
+                                <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200/80 px-2.5 py-1 rounded-full">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
                                   Aktif
                                 </span>
                               ) : (
-                                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-zinc-100 text-zinc-600 border border-zinc-200">
-                                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span>
+                                <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-zinc-500 bg-zinc-100 border border-zinc-200 px-2.5 py-1 rounded-full">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-400" />
                                   Nonaktif
                                 </span>
                               )}
                             </td>
 
                             {/* Aksi */}
-                            <td className="py-4 px-6 text-right whitespace-nowrap">
+                            <td className="py-4 px-5 text-right">
                               <div className="flex items-center justify-end gap-1.5">
                                 <button
-                                  onClick={() => handleOpenEditCategory(cat)}
+                                  onClick={() => openEditCategoryDrawer(cat)}
                                   title="Edit Kategori"
-                                  className="p-2 text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 rounded-lg transition-colors"
+                                  className="p-2 rounded-xl text-zinc-500 hover:text-zinc-950 hover:bg-zinc-100 transition-colors"
                                 >
                                   <Pencil className="w-4 h-4" />
                                 </button>
-                                <button
-                                  onClick={() => setDeactivatingCategory(cat)}
-                                  title={cat.isActive ? 'Nonaktifkan Kategori' : 'Aktifkan Kategori'}
-                                  className={`p-2 rounded-lg transition-colors ${
-                                    cat.isActive
-                                      ? 'text-zinc-400 hover:text-rose-600 hover:bg-rose-50'
-                                      : 'text-zinc-400 hover:text-emerald-600 hover:bg-emerald-50'
-                                  }`}
-                                >
-                                  {cat.isActive ? (
-                                    <PowerOff className="w-4 h-4" />
-                                  ) : (
-                                    <Eye className="w-4 h-4 text-emerald-600" />
-                                  )}
-                                </button>
+
+                                {isActive ? (
+                                  <button
+                                    onClick={() =>
+                                      setConfirmModal({
+                                        open: true,
+                                        category: cat,
+                                        action: 'deactivate',
+                                      })
+                                    }
+                                    title="Nonaktifkan Kategori"
+                                    className="p-2 rounded-xl text-zinc-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                                  >
+                                    <Power className="w-4 h-4" />
+                                  </button>
+                                ) : (
+                                  <button
+                                    onClick={() =>
+                                      setConfirmModal({
+                                        open: true,
+                                        category: cat,
+                                        action: 'activate',
+                                      })
+                                    }
+                                    title="Aktifkan Kembali Kategori"
+                                    className="p-2 rounded-xl text-zinc-400 hover:text-emerald-600 hover:bg-emerald-50 transition-colors"
+                                  >
+                                    <RotateCcw className="w-4 h-4" />
+                                  </button>
+                                )}
                               </div>
                             </td>
                           </tr>
-                        ))
-                      ) : (
-                        <tr>
-                          <td colSpan={5} className="py-12 text-center text-zinc-400">
-                            <Layers className="w-8 h-8 mx-auto text-zinc-300 mb-2" />
-                            <p className="text-sm font-semibold text-zinc-700">
-                              Tidak ada kategori ditemukan
-                            </p>
-                            <p className="text-xs text-zinc-400 mt-1">
-                              Coba periksa kata kunci pencarian atau buat kategori baru.
-                            </p>
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
 
-                <div className="p-4 bg-zinc-50 border-t border-zinc-200 flex items-center justify-between text-xs text-zinc-500">
-                  <span>
-                    Menampilkan <strong>{filteredCategories.length}</strong> dari{' '}
-                    <strong>{categories.length}</strong> kategori
-                  </span>
-                  <span className="text-[11px] text-zinc-400">
-                    Sesuai PRD 9.3.3 &amp; 13.4.4
-                  </span>
-                </div>
+              {/* Table Footer */}
+              <div className="p-4 border-t border-zinc-100 bg-zinc-50/50 flex items-center justify-between text-xs text-zinc-500">
+                <p>
+                  Menampilkan{' '}
+                  <strong className="text-zinc-800">{filteredCategories.length}</strong> dari{' '}
+                  <strong className="text-zinc-800">{categories.length}</strong> kategori
+                </p>
+                <span className="text-[11px] text-zinc-400">
+                  Data kategori tersinkronisasi 100% dengan tabel `categories` di PostgreSQL.
+                </span>
               </div>
             </div>
           )}
 
-          {/* =================================================================
-              4. UNITS TABLE TAB (PRD 13.4.5 & 6.3)
-          ================================================================= */}
+          {/* ───────────────────────────────────────────────────────────── */}
+          {/* TIER 3B: UNITS DATA TABLE (WHEN TAB === UNITS)                */}
+          {/* ───────────────────────────────────────────────────────────── */}
           {activeTab === 'units' && (
-            <div className="space-y-6 animate-in fade-in duration-200">
-              {/* Unit Info Banner */}
-              <div className="bg-blue-50/60 border border-blue-200/80 rounded-2xl p-4.5 flex items-start gap-3.5 text-xs text-blue-900">
-                <div className="p-2 bg-blue-100 text-blue-700 rounded-xl shrink-0">
-                  <Info className="w-4 h-4" />
-                </div>
-                <div className="space-y-1">
-                  <h4 className="font-bold text-blue-950">
-                    Aturan Bisnis Kuantitas Desimal (PRD 6.3 &amp; 13.4.5)
-                  </h4>
-                  <p className="text-blue-800 leading-relaxed">
-                    Satuan dengan tanda <strong>&quot;Ya, Desimal&quot;</strong> (misal <strong>Meter</strong>) mengizinkan pelanggan membeli kuantitas desimal seperti <strong>2,5 meter</strong> atau <strong>10,75 meter</strong>. Satuan <strong>&quot;Hanya Bulat&quot;</strong> (misal <strong>Pcs, Roll</strong>) akan ditolak oleh backend jika dimasukkan nilai pecahan.
-                  </p>
-                </div>
-              </div>
-
-              {/* Unit Filter Bar */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div className="relative w-full sm:w-72">
-                  <Search className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-                  <input
-                    type="text"
-                    placeholder="Cari nama atau simbol satuan..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full bg-white border border-zinc-200 rounded-lg pl-10 pr-4 py-2 text-xs text-zinc-900 placeholder:text-zinc-400 focus:outline-hidden focus:ring-2 focus:ring-zinc-900 transition-all shadow-xs"
-                  />
-                  {searchQuery && (
-                    <button
-                      onClick={() => setSearchQuery('')}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                </div>
-
-                <div className="flex items-center gap-2.5">
-                  <div className="relative">
-                    <select
-                      value={unitDecimalFilter}
-                      onChange={(e) => setUnitDecimalFilter(e.target.value as any)}
-                      className="appearance-none bg-white border border-zinc-200 rounded-lg px-4 py-2 pr-9 text-xs font-semibold text-zinc-700 hover:border-zinc-300 focus:outline-hidden focus:ring-2 focus:ring-zinc-900 shadow-xs cursor-pointer transition-colors"
-                    >
-                      <option value="ALL">Semua Aturan Kuantitas</option>
-                      <option value="DECIMAL">Bisa Desimal (Pecahan)</option>
-                      <option value="INTEGER">Hanya Bilangan Bulat</option>
-                    </select>
-                    <Filter className="w-3.5 h-3.5 text-zinc-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                  </div>
-                </div>
-              </div>
-
-              {/* The Units Table */}
-              <div className="bg-white border border-zinc-200 rounded-2xl shadow-xs overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs border-collapse">
-                    <thead>
-                      <tr className="bg-zinc-50 border-b border-zinc-200 text-zinc-500 text-xs uppercase tracking-wider font-semibold">
-                        <th className="py-4 px-6">NAMA SATUAN</th>
-                        <th className="py-4 px-6">SIMBOL</th>
-                        <th className="py-4 px-6">IZINKAN DESIMAL?</th>
-                        <th className="py-4 px-6">CONTOH PENGGUNAAN PRODUK</th>
-                        <th className="py-4 px-6 text-right">AKSI</th>
+            <div className="bg-white rounded-3xl border border-zinc-200/80 shadow-xs overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs sm:text-sm">
+                  <thead>
+                    <tr className="border-b border-zinc-200/80 bg-zinc-50/80 text-zinc-500 text-[11px] uppercase tracking-wider font-semibold">
+                      <th className="py-4 px-5">Nama Satuan</th>
+                      <th className="py-4 px-5">Simbol Satuan</th>
+                      <th className="py-4 px-5">Format Kuantitas (Desimal)</th>
+                      <th className="py-4 px-4 text-center">Produk Terkait</th>
+                      <th className="py-4 px-5 text-right">Aksi</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-100">
+                    {loading ? (
+                      <tr>
+                        <td colSpan={5} className="py-16 text-center text-zinc-400">
+                          <div className="flex flex-col items-center justify-center gap-2">
+                            <RefreshCw className="w-6 h-6 animate-spin text-zinc-300" />
+                            <span className="text-xs">Memuat satuan ukuran...</span>
+                          </div>
+                        </td>
                       </tr>
-                    </thead>
-                    <tbody className="divide-y divide-zinc-100 text-zinc-700">
-                      {filteredUnits.length > 0 ? (
-                        filteredUnits.map((unit) => (
-                          <tr
-                            key={unit.id}
-                            className="hover:bg-zinc-50/70 transition-colors group"
-                          >
-                            {/* Nama Satuan */}
-                            <td className="py-4 px-6 font-semibold text-zinc-900 whitespace-nowrap">
-                              <div className="flex items-center gap-2.5">
-                                <span className="w-8 h-8 rounded-lg bg-zinc-100 flex items-center justify-center text-zinc-700 font-bold text-xs shrink-0 border border-zinc-200">
-                                  {unit.symbol.slice(0, 2)}
-                                </span>
-                                <div>
-                                  <span className="block font-semibold text-zinc-900 group-hover:text-zinc-950">
-                                    {unit.name}
-                                  </span>
-                                  <span className="text-[10px] text-zinc-400 font-mono">
-                                    {unit.productCount} Produk Memakai
-                                  </span>
-                                </div>
+                    ) : filteredUnits.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="py-16 text-center">
+                          <div className="max-w-xs mx-auto space-y-2 text-zinc-400">
+                            <Ruler className="w-10 h-10 mx-auto text-zinc-300" />
+                            <p className="font-semibold text-zinc-700 text-sm">
+                              Tidak ada satuan yang cocok
+                            </p>
+                            <p className="text-xs">
+                              Coba sesuaikan kata kunci pencarian atau daftarkan satuan baru.
+                            </p>
+                          </div>
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredUnits.map((unit) => (
+                        <tr
+                          key={unit.id}
+                          className="hover:bg-zinc-50/70 transition-colors group"
+                        >
+                          {/* Nama Satuan */}
+                          <td className="py-4 px-5">
+                            <div className="flex items-center gap-3">
+                              <div className="w-9 h-9 rounded-2xl bg-blue-50 text-blue-700 border border-blue-200/80 flex items-center justify-center font-bold text-sm shrink-0">
+                                {unit.unitSymbol || 'U'}
                               </div>
-                            </td>
-
-                            {/* Simbol */}
-                            <td className="py-4 px-6 whitespace-nowrap">
-                              <span className="font-mono text-xs font-bold text-zinc-800 bg-zinc-100 px-2.5 py-1 rounded border border-zinc-200">
-                                {unit.symbol}
+                              <span className="font-bold text-zinc-900 group-hover:text-blue-600 transition-colors">
+                                {unit.unitName}
                               </span>
-                            </td>
+                            </div>
+                          </td>
 
-                            {/* Izinkan Desimal */}
-                            <td className="py-4 px-6 whitespace-nowrap">
-                              {unit.allowDecimal ? (
-                                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-blue-50 text-blue-700 border border-blue-200 shadow-2xs">
-                                  <Check className="w-3.5 h-3.5 text-blue-600" />
-                                  Ya, Desimal (misal 2.5)
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold bg-zinc-100 text-zinc-600 border border-zinc-200">
-                                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-400"></span>
-                                  Hanya Bulat (1, 2, 3...)
-                                </span>
-                              )}
-                            </td>
+                          {/* Simbol Satuan */}
+                          <td className="py-4 px-5">
+                            <span className="font-mono font-bold text-xs bg-zinc-100 text-zinc-800 px-2.5 py-1 rounded-lg border border-zinc-200/70">
+                              {unit.unitSymbol}
+                            </span>
+                          </td>
 
-                            {/* Contoh Penggunaan */}
-                            <td className="py-4 px-6 text-zinc-500 max-w-xs truncate">
-                              <span className="text-zinc-600 text-xs font-medium">
-                                {unit.exampleUsage}
+                          {/* Format Kuantitas (Desimal) */}
+                          <td className="py-4 px-5">
+                            {unit.allowDecimal ? (
+                              <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-200/80 px-2.5 py-1 rounded-full">
+                                <Check className="w-3.5 h-3.5 text-blue-600" />
+                                Mendukung Desimal (contoh: 0.5 m, 2.5 m)
                               </span>
-                            </td>
+                            ) : (
+                              <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-600 bg-zinc-100 border border-zinc-200 px-2.5 py-1 rounded-full">
+                                Bilangan Bulat (contoh: 1, 2, 10)
+                              </span>
+                            )}
+                          </td>
 
-                            {/* Aksi */}
-                            <td className="py-4 px-6 text-right whitespace-nowrap">
+                          {/* Produk Terkait */}
+                          <td className="py-4 px-4 text-center">
+                            <span className="inline-block bg-zinc-100 text-zinc-800 font-semibold text-xs px-2.5 py-1 rounded-full">
+                              {unit.productCount || 0} Produk
+                            </span>
+                          </td>
+
+                          {/* Aksi */}
+                          <td className="py-4 px-5 text-right">
+                            <div className="flex items-center justify-end gap-1.5">
                               <button
-                                onClick={() => handleOpenEditUnit(unit)}
-                                title="Edit Satuan Ukur"
-                                className="p-2 text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 rounded-lg transition-colors"
+                                onClick={() => openEditUnitDrawer(unit)}
+                                title="Edit Satuan"
+                                className="p-2 rounded-xl text-zinc-500 hover:text-zinc-950 hover:bg-zinc-100 transition-colors"
                               >
                                 <Pencil className="w-4 h-4" />
                               </button>
-                            </td>
-                          </tr>
-                        ))
-                      ) : (
-                        <tr>
-                          <td colSpan={5} className="py-12 text-center text-zinc-400">
-                            <Ruler className="w-8 h-8 mx-auto text-zinc-300 mb-2" />
-                            <p className="text-sm font-semibold text-zinc-700">
-                              Tidak ada satuan ukur ditemukan
-                            </p>
+                            </div>
                           </td>
                         </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
 
-                <div className="p-4 bg-zinc-50 border-t border-zinc-200 flex items-center justify-between text-xs text-zinc-500">
-                  <span>
-                    Menampilkan <strong>{filteredUnits.length}</strong> dari{' '}
-                    <strong>{units.length}</strong> satuan ukur
-                  </span>
-                  <span className="text-[11px] text-zinc-400">
-                    Atribut: units.allow_decimal (PostgreSQL boolean)
-                  </span>
-                </div>
+              {/* Table Footer */}
+              <div className="p-4 border-t border-zinc-100 bg-zinc-50/50 flex items-center justify-between text-xs text-zinc-500">
+                <p>
+                  Menampilkan <strong className="text-zinc-800">{filteredUnits.length}</strong> dari{' '}
+                  <strong className="text-zinc-800">{units.length}</strong> satuan ukuran
+                </p>
+                <span className="text-[11px] text-zinc-400">
+                  Data satuan tersinkronisasi 100% dengan tabel `units` di PostgreSQL.
+                </span>
               </div>
             </div>
           )}
         </main>
-      </div>
 
-      {/* =====================================================================
-          5. DYNAMIC SLIDE-OUT DRAWER (For Categories & Units)
-      ===================================================================== */}
-      {isDrawerOpen && (
-        <div className="fixed inset-0 z-50 overflow-hidden">
-          {/* Backdrop overlay */}
+      {/* ─────────────────────────────────────────────────────────────────── */}
+      {/* TIER 4: SLIDE-OUT DRAWER (CREATE & EDIT CATEGORY / UNIT)            */}
+      {/* ─────────────────────────────────────────────────────────────────── */}
+      {drawerOpen && (
+        <div className="fixed inset-0 z-50 flex justify-end">
+          {/* Backdrop */}
           <div
-            onClick={() => setIsDrawerOpen(false)}
-            className="fixed inset-0 bg-black/60 backdrop-blur-xs transition-opacity duration-300 animate-in fade-in"
+            className="fixed inset-0 bg-black/60 backdrop-blur-xs transition-opacity"
+            onClick={() => !saving && setDrawerOpen(false)}
           />
 
-          {/* Drawer Panel */}
-          <div className="fixed inset-y-0 right-0 w-full max-w-md bg-white shadow-2xl border-l border-zinc-200 z-50 flex flex-col transform transition-transform duration-300 animate-in slide-in-from-right">
+          {/* Drawer Container */}
+          <div className="relative w-full max-w-md bg-white shadow-2xl flex flex-col h-full z-10 animate-in slide-in-from-right duration-200">
             {/* Drawer Header */}
-            <div className="h-20 px-6 border-b border-zinc-200 flex items-center justify-between shrink-0 bg-zinc-50/50">
+            <div className="h-16 px-6 border-b border-zinc-200 flex items-center justify-between shrink-0 bg-white">
               <div>
-                <h3 className="text-lg font-bold text-zinc-900 tracking-tight">
-                  {drawerMode === 'CATEGORY'
+                <h3 className="font-bold text-zinc-900 text-base">
+                  {activeTab === 'categories'
                     ? editingCategory
-                      ? 'Edit Kategori Produk'
+                      ? `Edit Kategori • ${editingCategory.name}`
                       : 'Tambah Kategori Baru'
                     : editingUnit
-                    ? 'Edit Satuan Ukur'
-                    : 'Tambah Satuan Ukur Baru'}
+                    ? `Edit Satuan • ${editingUnit.unitName}`
+                    : 'Tambah Satuan Ukur'}
                 </h3>
-                <p className="text-xs text-zinc-500 mt-0.5">
-                  {drawerMode === 'CATEGORY'
-                    ? 'Kelola pengelompokan produk bahan jas hujan'
-                    : 'Tentukan unit hitung dan validasi kuantitas desimal'}
+                <p className="text-xs text-zinc-400">
+                  {activeTab === 'categories'
+                    ? 'Kelola struktur klasifikasi material Toko Enstein'
+                    : 'Konfigurasi master satuan ukuran & desimal kuantitas'}
                 </p>
               </div>
               <button
-                onClick={() => setIsDrawerOpen(false)}
-                className="p-2 text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 rounded-xl transition-colors"
+                onClick={() => setDrawerOpen(false)}
+                disabled={saving}
+                className="p-2 rounded-xl text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 transition-colors"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            {/* Drawer Body: CATEGORY FORM */}
-            {drawerMode === 'CATEGORY' && (
+            {/* Form Body: Category Mode */}
+            {activeTab === 'categories' ? (
               <form
-                id="category-drawer-form"
                 onSubmit={handleSaveCategory}
-                className="flex-1 overflow-y-auto p-6 space-y-5 text-xs"
+                className="flex-1 overflow-y-auto p-6 space-y-5 bg-zinc-50/50"
               >
-                {/* Nama Kategori */}
-                <div>
-                  <label className="block text-xs font-semibold text-zinc-700 mb-1.5">
-                    Nama Kategori <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Contoh: Material Jas Hujan, Resleting, Karet..."
-                    value={categoryFormData.name}
-                    onChange={(e) =>
-                      setCategoryFormData({ ...categoryFormData, name: e.target.value })
-                    }
-                    className="w-full bg-white border border-zinc-200 rounded-lg px-3.5 py-2 text-xs text-zinc-900 focus:outline-hidden focus:ring-2 focus:ring-zinc-900 transition-all"
-                  />
-                </div>
-
-                {/* Deskripsi */}
-                <div>
-                  <label className="block text-xs font-semibold text-zinc-700 mb-1.5">
-                    Deskripsi Kategori
-                  </label>
-                  <textarea
-                    rows={4}
-                    placeholder="Jelaskan jenis bahan dan komponen yang termasuk dalam kategori ini..."
-                    value={categoryFormData.description}
-                    onChange={(e) =>
-                      setCategoryFormData({ ...categoryFormData, description: e.target.value })
-                    }
-                    className="w-full bg-white border border-zinc-200 rounded-lg p-3 text-xs text-zinc-900 focus:outline-hidden focus:ring-2 focus:ring-zinc-900 transition-all resize-none"
-                  />
-                </div>
-
-                {/* Status Toggle Switch */}
-                <div className="pt-2 border-t border-zinc-100 flex items-center justify-between bg-zinc-50 p-3 rounded-xl border border-zinc-200">
+                <div className="bg-white p-5 rounded-2xl border border-zinc-200 shadow-xs space-y-4">
+                  {/* Category Name */}
                   <div>
-                    <p className="text-xs font-bold text-zinc-900">
-                      Status Kategori: {categoryFormData.isActive ? 'Aktif' : 'Nonaktif'}
-                    </p>
-                    <p className="text-[11px] text-zinc-500 mt-0.5">
-                      Kategori aktif akan tampil di menu navigasi katalog dan form tambah produk.
-                    </p>
+                    <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                      Nama Kategori <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={categoryForm.name}
+                      onChange={(e) =>
+                        setCategoryForm({ ...categoryForm, name: e.target.value })
+                      }
+                      placeholder="Contoh: Material Jas Hujan"
+                      className={`w-full px-3.5 py-2.5 text-xs sm:text-sm rounded-xl border ${
+                        formErrors.name ? 'border-rose-300 bg-rose-50' : 'border-zinc-200'
+                      } focus:outline-none focus:ring-2 focus:ring-zinc-900`}
+                    />
+                    {formErrors.name && (
+                      <p className="text-xs text-rose-600 mt-1">{formErrors.name}</p>
+                    )}
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setCategoryFormData({
-                        ...categoryFormData,
-                        isActive: !categoryFormData.isActive,
-                      })
-                    }
-                    className={`w-11 h-6 flex items-center rounded-full p-1 transition-colors duration-200 focus:outline-hidden ${
-                      categoryFormData.isActive ? 'bg-zinc-900' : 'bg-zinc-300'
-                    }`}
-                  >
-                    <div
-                      className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform duration-200 ${
-                        categoryFormData.isActive ? 'translate-x-5' : 'translate-x-0'
-                      }`}
+                  {/* Slug (Optional / Auto-generated) */}
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                      Slug URL <span className="text-zinc-400 text-[10px]">(Opsional)</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={categoryForm.slug}
+                      onChange={(e) =>
+                        setCategoryForm({ ...categoryForm, slug: e.target.value.toLowerCase() })
+                      }
+                      placeholder="material-jas-hujan (otomatis dibuat jika kosong)"
+                      className="w-full px-3.5 py-2.5 text-xs sm:text-sm font-mono rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-zinc-900"
                     />
-                  </button>
+                  </div>
+
+                  {/* Description */}
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                      Deskripsi Kategori
+                    </label>
+                    <textarea
+                      rows={3}
+                      value={categoryForm.description}
+                      onChange={(e) =>
+                        setCategoryForm({ ...categoryForm, description: e.target.value })
+                      }
+                      placeholder="Deskripsikan material atau perlengkapan yang masuk dalam kategori ini..."
+                      className="w-full px-3.5 py-2.5 text-xs sm:text-sm rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-zinc-900 resize-none"
+                    />
+                  </div>
+
+                  {/* Active Switch */}
+                  <div className="flex items-center justify-between border-t border-zinc-100 pt-3">
+                    <div>
+                      <p className="text-xs font-bold text-zinc-900">
+                        Status Kategori (Aktif di Katalog)
+                      </p>
+                      <p className="text-[11px] text-zinc-400">
+                        Kategori aktif akan tampil di filter beranda dan menu navigasi
+                      </p>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={categoryForm.isActive}
+                        onChange={(e) =>
+                          setCategoryForm({ ...categoryForm, isActive: e.target.checked })
+                        }
+                        className="sr-only peer"
+                      />
+                      <div className="w-11 h-6 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600" />
+                    </label>
+                  </div>
                 </div>
               </form>
-            )}
-
-            {/* Drawer Body: UNIT FORM */}
-            {drawerMode === 'UNIT' && (
+            ) : (
+              /* Form Body: Unit Mode */
               <form
-                id="unit-drawer-form"
                 onSubmit={handleSaveUnit}
-                className="flex-1 overflow-y-auto p-6 space-y-5 text-xs"
+                className="flex-1 overflow-y-auto p-6 space-y-5 bg-zinc-50/50"
               >
-                {/* Nama Satuan */}
-                <div>
-                  <label className="block text-xs font-semibold text-zinc-700 mb-1.5">
-                    Nama Satuan <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Contoh: Meter, Piece, Roll, Pack..."
-                    value={unitFormData.name}
-                    onChange={(e) =>
-                      setUnitFormData({ ...unitFormData, name: e.target.value })
-                    }
-                    className="w-full bg-white border border-zinc-200 rounded-lg px-3.5 py-2 text-xs text-zinc-900 focus:outline-hidden focus:ring-2 focus:ring-zinc-900 transition-all"
-                  />
-                </div>
-
-                {/* Simbol Satuan */}
-                <div>
-                  <label className="block text-xs font-semibold text-zinc-700 mb-1.5">
-                    Simbol Satuan <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Contoh: m, pcs, roll, kg..."
-                    value={unitFormData.symbol}
-                    onChange={(e) =>
-                      setUnitFormData({ ...unitFormData, symbol: e.target.value })
-                    }
-                    className="w-full bg-white border border-zinc-200 rounded-lg px-3.5 py-2 text-xs font-mono font-bold text-zinc-900 focus:outline-hidden focus:ring-2 focus:ring-zinc-900 transition-all"
-                  />
-                  <p className="text-[11px] text-zinc-400 mt-1">
-                    Simbol ringkas yang ditampilkan di tabel harga dan keranjang (e.g. Rp 25.000/m).
-                  </p>
-                </div>
-
-                {/* Allow Decimal Toggle (CRITICAL PRD 6.3 & 13.4.5) */}
-                <div className="pt-2 border-t border-zinc-100 flex items-start justify-between bg-blue-50/50 p-3.5 rounded-xl border border-blue-200/80">
-                  <div className="pr-4">
-                    <p className="text-xs font-bold text-zinc-900 flex items-center gap-1.5">
-                      <span>Izinkan Kuantitas Desimal?</span>
-                      {unitFormData.allowDecimal && (
-                        <span className="text-[10px] bg-blue-100 text-blue-700 px-2 py-0.2 rounded-full font-bold">
-                          Aktif
-                        </span>
-                      )}
-                    </p>
-                    <p className="text-[11px] text-zinc-600 mt-1 leading-relaxed">
-                      Aktifkan jika produk bisa dibeli dalam pecahan desimal (contoh: <strong>2,5 meter kain</strong>). Jika nonaktif, backend akan menolak input pecahan dan hanya mengizinkan bilangan bulat (contoh: <strong>1 pcs resleting</strong>).
-                    </p>
+                <div className="bg-white p-5 rounded-2xl border border-zinc-200 shadow-xs space-y-4">
+                  {/* Unit Name */}
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                      Nama Satuan Ukur <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={unitForm.unitName}
+                      onChange={(e) =>
+                        setUnitForm({ ...unitForm, unitName: e.target.value })
+                      }
+                      placeholder="Contoh: Meter, Roll, Pcs, Kilogram"
+                      className={`w-full px-3.5 py-2.5 text-xs sm:text-sm rounded-xl border ${
+                        formErrors.unitName ? 'border-rose-300 bg-rose-50' : 'border-zinc-200'
+                      } focus:outline-none focus:ring-2 focus:ring-zinc-900`}
+                    />
+                    {formErrors.unitName && (
+                      <p className="text-xs text-rose-600 mt-1">{formErrors.unitName}</p>
+                    )}
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setUnitFormData({
-                        ...unitFormData,
-                        allowDecimal: !unitFormData.allowDecimal,
-                      })
-                    }
-                    className={`w-11 h-6 flex items-center rounded-full p-1 transition-colors duration-200 focus:outline-hidden shrink-0 mt-0.5 ${
-                      unitFormData.allowDecimal ? 'bg-blue-600' : 'bg-zinc-300'
-                    }`}
-                  >
-                    <div
-                      className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform duration-200 ${
-                        unitFormData.allowDecimal ? 'translate-x-5' : 'translate-x-0'
-                      }`}
+                  {/* Unit Symbol */}
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                      Simbol Satuan <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={unitForm.unitSymbol}
+                      onChange={(e) =>
+                        setUnitForm({ ...unitForm, unitSymbol: e.target.value })
+                      }
+                      placeholder="Contoh: m, roll, pcs, kg"
+                      className={`w-full px-3.5 py-2.5 text-xs sm:text-sm font-mono rounded-xl border ${
+                        formErrors.unitSymbol ? 'border-rose-300 bg-rose-50' : 'border-zinc-200'
+                      } focus:outline-none focus:ring-2 focus:ring-zinc-900`}
                     />
-                  </button>
-                </div>
+                    {formErrors.unitSymbol && (
+                      <p className="text-xs text-rose-600 mt-1">{formErrors.unitSymbol}</p>
+                    )}
+                  </div>
 
-                {/* Contoh Penggunaan */}
-                <div>
-                  <label className="block text-xs font-semibold text-zinc-700 mb-1.5">
-                    Contoh Produk yang Menggunakan
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Contoh: Kain PVC Balon, Karet Elastis..."
-                    value={unitFormData.exampleUsage}
-                    onChange={(e) =>
-                      setUnitFormData({ ...unitFormData, exampleUsage: e.target.value })
-                    }
-                    className="w-full bg-white border border-zinc-200 rounded-lg px-3.5 py-2 text-xs text-zinc-900 focus:outline-hidden focus:ring-2 focus:ring-zinc-900 transition-all"
-                  />
+                  {/* Decimal Allow Switch with Informational Card */}
+                  <div className="p-4 rounded-2xl bg-blue-50/60 border border-blue-200/80 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-xs font-bold text-blue-950">
+                          Izinkan Kuantitas Desimal (allow_decimal)
+                        </p>
+                        <p className="text-[11px] text-blue-700 mt-0.5">
+                          Mengizinkan pelanggan membeli kuantitas pecahan
+                        </p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={unitForm.allowDecimal}
+                          onChange={(e) =>
+                            setUnitForm({ ...unitForm, allowDecimal: e.target.checked })
+                          }
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600" />
+                      </label>
+                    </div>
+
+                    <p className="text-[11px] text-blue-800 leading-relaxed border-t border-blue-200/60 pt-2">
+                      💡 <strong>Petunjuk:</strong> Aktifkan untuk bahan yang dijual per meteran atau
+                      pecahan (misal: 0.5 m, 2.5 m). Matikan untuk barang berwujud satuan utuh seperti
+                      kancing, resleting, atau stopper tali.
+                    </p>
+                  </div>
                 </div>
               </form>
             )}
 
-            {/* Drawer Footer */}
-            <div className="p-4 px-6 border-t border-zinc-200 flex items-center justify-end gap-3 bg-white shrink-0">
+            {/* Sticky Drawer Footer */}
+            <div className="p-4 px-6 border-t border-zinc-200 bg-white flex items-center justify-between gap-3 shrink-0">
               <button
                 type="button"
-                onClick={() => setIsDrawerOpen(false)}
-                className="px-4 py-2 text-xs font-semibold text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 rounded-lg transition-colors"
+                onClick={() => setDrawerOpen(false)}
+                disabled={saving}
+                className="px-5 py-2.5 text-xs sm:text-sm font-semibold text-zinc-600 hover:text-zinc-950 hover:bg-zinc-100 rounded-full transition-colors"
               >
                 Batal
               </button>
               <button
-                type="submit"
-                form={drawerMode === 'CATEGORY' ? 'category-drawer-form' : 'unit-drawer-form'}
-                className="bg-zinc-900 text-white px-5 py-2 text-xs font-semibold rounded-lg hover:bg-zinc-800 transition-all shadow-xs flex items-center gap-1.5 active:scale-95"
+                type="button"
+                onClick={activeTab === 'categories' ? handleSaveCategory : handleSaveUnit}
+                disabled={saving}
+                className="flex items-center gap-2 bg-zinc-900 hover:bg-zinc-800 disabled:opacity-50 text-white rounded-full px-6 py-2.5 text-xs sm:text-sm font-semibold shadow-sm transition-colors"
               >
-                <Check className="w-4 h-4" />
-                <span>
-                  {drawerMode === 'CATEGORY'
-                    ? editingCategory
-                      ? 'Simpan Perubahan'
-                      : 'Simpan Kategori'
-                    : editingUnit
-                    ? 'Simpan Perubahan'
-                    : 'Simpan Satuan'}
-                </span>
+                {saving ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <span>Menyimpan...</span>
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-4 h-4" />
+                    <span>Simpan Perubahan</span>
+                  </>
+                )}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* =====================================================================
-          SOFT TOGGLE MODAL (CATEGORIES)
-      ===================================================================== */}
-      {deactivatingCategory && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs animate-in fade-in">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-zinc-200 animate-in zoom-in-95 duration-150">
-            <div className="flex items-start gap-4">
+      {/* ─────────────────────────────────────────────────────────────────── */}
+      {/* DEACTIVATE / REACTIVATE CATEGORY CONFIRMATION MODAL                 */}
+      {/* ─────────────────────────────────────────────────────────────────── */}
+      {confirmModal.open && confirmModal.category && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4">
+          <div
+            className="fixed inset-0 bg-black/60 backdrop-blur-xs"
+            onClick={() => setConfirmModal({ open: false, category: null, action: 'deactivate' })}
+          />
+          <div className="relative bg-white rounded-3xl p-6 shadow-2xl border border-zinc-200 max-w-md w-full z-10 space-y-4 animate-in zoom-in-95 duration-150">
+            <div className="flex items-start gap-3">
               <div
-                className={`p-3 rounded-2xl shrink-0 ${
-                  deactivatingCategory.isActive
+                className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 ${
+                  confirmModal.action === 'deactivate'
                     ? 'bg-rose-50 text-rose-600'
                     : 'bg-emerald-50 text-emerald-600'
                 }`}
               >
-                {deactivatingCategory.isActive ? (
-                  <PowerOff className="w-6 h-6" />
+                {confirmModal.action === 'deactivate' ? (
+                  <Power className="w-5 h-5" />
                 ) : (
-                  <CheckCircle2 className="w-6 h-6" />
+                  <RotateCcw className="w-5 h-5" />
                 )}
               </div>
-              <div className="flex-1">
-                <h3 className="text-base font-bold text-zinc-900">
-                  {deactivatingCategory.isActive
-                    ? 'Nonaktifkan Kategori Ini?'
-                    : 'Aktifkan Kembali Kategori Ini?'}
-                </h3>
-                <p className="text-xs font-semibold text-zinc-800 mt-1">
-                  {deactivatingCategory.name} ({deactivatingCategory.productCount} Produk Terkait)
+              <div>
+                <h4 className="font-bold text-zinc-900 text-sm">
+                  {confirmModal.action === 'deactivate'
+                    ? `Nonaktifkan Kategori "${confirmModal.category.name}"?`
+                    : `Aktifkan Kembali Kategori "${confirmModal.category.name}"?`}
+                </h4>
+                <p className="text-xs text-zinc-500 mt-1 leading-relaxed">
+                  {confirmModal.action === 'deactivate' ? (
+                    <>
+                      Kategori ini akan disembunyikan dari navigasi toko online.{' '}
+                      {confirmModal.category.productCount > 0 && (
+                        <strong className="text-amber-700 block mt-1">
+                          ⚠️ Peringatan: Terdapat {confirmModal.category.productCount} produk aktif
+                          terkait dalam kategori ini.
+                        </strong>
+                      )}
+                    </>
+                  ) : (
+                    'Kategori ini akan kembali aktif dan ditampilkan pada navigasi katalog pelanggan.'
+                  )}
                 </p>
-
-                <div className="bg-zinc-50 border border-zinc-200 rounded-xl p-3 mt-3 text-[11px] text-zinc-600 space-y-1">
-                  <div className="flex items-center gap-1.5 font-semibold text-zinc-800">
-                    <Info className="w-3.5 h-3.5 text-zinc-500" />
-                    <span>Integritas Hubungan Data (Foreign Key):</span>
-                  </div>
-                  <p>
-                    {deactivatingCategory.isActive
-                      ? 'Kategori tidak akan dihapus permanen agar produk yang telah ada tetap memiliki referensi yang valid. Kategori hanya disembunyikan dari katalog dan form baru.'
-                      : 'Kategori akan kembali aktif dan dapat dipilih di form penambahan produk.'}
-                  </p>
-                </div>
               </div>
             </div>
 
-            <div className="pt-5 mt-5 border-t border-zinc-100 flex items-center justify-end gap-2.5">
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-zinc-100">
               <button
-                onClick={() => setDeactivatingCategory(null)}
-                className="px-4 py-2 text-xs font-semibold text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 rounded-lg transition-colors"
+                type="button"
+                onClick={() =>
+                  setConfirmModal({ open: false, category: null, action: 'deactivate' })
+                }
+                className="px-4 py-2 text-xs font-semibold text-zinc-600 hover:text-zinc-900 rounded-full hover:bg-zinc-100 transition-colors"
               >
                 Batal
               </button>
               <button
-                onClick={handleConfirmToggleCategory}
-                className={`px-4 py-2 text-xs font-semibold rounded-lg shadow-xs transition-colors flex items-center gap-1.5 ${
-                  deactivatingCategory.isActive
-                    ? 'bg-rose-600 text-white hover:bg-rose-700'
-                    : 'bg-zinc-900 text-white hover:bg-zinc-800'
+                type="button"
+                onClick={handleExecuteCategoryStatusChange}
+                className={`px-5 py-2 text-xs font-semibold text-white rounded-full transition-colors shadow-xs ${
+                  confirmModal.action === 'deactivate'
+                    ? 'bg-rose-600 hover:bg-rose-700'
+                    : 'bg-emerald-600 hover:bg-emerald-700'
                 }`}
               >
-                {deactivatingCategory.isActive ? 'Nonaktifkan Kategori' : 'Aktifkan Kategori'}
+                {confirmModal.action === 'deactivate' ? 'Ya, Nonaktifkan' : 'Ya, Aktifkan Kembali'}
               </button>
             </div>
           </div>
-        </div>
-      )}
-
-      {/* =====================================================================
-          TOAST NOTIFICATION FEEDBACK
-      ===================================================================== */}
-      {toastMessage && (
-        <div className="fixed bottom-6 right-6 z-50 max-w-sm w-full bg-zinc-900 text-white p-4 rounded-2xl shadow-2xl border border-zinc-800 flex items-start gap-3 animate-in slide-in-from-bottom-5 duration-200">
-          <div
-            className={`p-1.5 rounded-lg mt-0.5 shrink-0 ${
-              toastMessage.type === 'warning'
-                ? 'bg-amber-500/20 text-amber-400'
-                : 'bg-emerald-500/20 text-emerald-400'
-            }`}
-          >
-            {toastMessage.type === 'warning' ? (
-              <AlertCircle className="w-4 h-4" />
-            ) : (
-              <Check className="w-4 h-4" />
-            )}
-          </div>
-          <div className="flex-1 min-w-0">
-            <h5 className="text-xs font-bold text-white">{toastMessage.title}</h5>
-            <p className="text-[11px] text-zinc-400 mt-0.5 leading-relaxed">
-              {toastMessage.desc}
-            </p>
-          </div>
-          <button
-            onClick={() => setToastMessage(null)}
-            className="text-zinc-500 hover:text-zinc-300 p-1"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
         </div>
       )}
     </div>

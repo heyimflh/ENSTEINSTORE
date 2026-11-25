@@ -28,7 +28,7 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 @RestController
-@RequestMapping("/api/admin/payments")
+@RequestMapping({"/api/admin/payments", "/admin/payments", "/api/api/admin/payments"})
 @PreAuthorize("hasRole('ADMIN')")
 @SecurityRequirement(name = "Bearer Authentication")
 @Tag(name = "Admin Payments", description = "Endpoints verifikasi pembayaran manual transfer untuk administrator")
@@ -71,7 +71,7 @@ public class AdminPaymentController {
         ));
     }
 
-    @PostMapping("/{orderId}/verify")
+    @RequestMapping(value = {"/{orderId}/verify", "/{orderId}"}, method = {RequestMethod.POST, RequestMethod.PUT, RequestMethod.PATCH})
     @Operation(summary = "Verifikasi pembayaran bukti transfer",
                description = "Menyetujui (mengubah status menjadi PAID & pesanan PROCESSING) atau menolak bukti transfer (TC-13).")
     public ResponseEntity<PaymentResponse> verifyPayment(
@@ -81,8 +81,13 @@ public class AdminPaymentController {
         Admin admin = adminRepository.findById(principal.getId())
                 .orElseThrow(() -> new UserNotFoundException("Admin tidak ditemukan."));
 
-        paymentService.verifyPayment(orderId, request.getApproved(), request.getRejectionReason(), admin);
-        Payment payment = paymentService.getPaymentByOrderId(orderId);
-        return ResponseEntity.ok(PaymentResponse.fromEntity(payment));
+        Payment payment = paymentRepository.findByOrderId(orderId)
+                .or(() -> paymentRepository.findById(orderId))
+                .orElseThrow(() -> new com.ensteinstore.exception.ResourceNotFoundException("Data pembayaran tidak ditemukan untuk ID atau Pesanan ID: " + orderId));
+
+        UUID targetId = payment.getOrder() != null ? payment.getOrder().getId() : payment.getId();
+        paymentService.verifyPayment(targetId, request.getApproved(), request.getRejectionReason(), admin);
+        Payment updatedPayment = paymentRepository.findById(payment.getId()).orElse(payment);
+        return ResponseEntity.ok(PaymentResponse.fromEntity(updatedPayment));
     }
 }

@@ -56,13 +56,13 @@ export async function simulatePayment(orderId: string | number, outcome: 'SUCCES
 // ─── Admin Orders ─────────────────────────────────────────────────────────────
 export async function adminGetOrders(params?: {
   page?: number; size?: number; status?: string;
-}): Promise<PagedResponse<OrderSummaryResponse>> {
+}): Promise<PagedResponse<OrderDetailResponse>> {
   const q = new URLSearchParams();
   if (params?.page !== undefined) q.set('page', String(params.page));
   if (params?.size !== undefined) q.set('size', String(params.size));
   if (params?.status) q.set('status', params.status);
   const qs = q.toString();
-  return api.get<PagedResponse<OrderSummaryResponse>>(`/api/admin/orders${qs ? `?${qs}` : ''}`);
+  return api.get<PagedResponse<OrderDetailResponse>>(`/api/admin/orders${qs ? `?${qs}` : ''}`);
 }
 
 export async function adminGetOrderDetail(idOrNumber: string | number): Promise<OrderDetailResponse> {
@@ -77,7 +77,10 @@ export async function adminUpdateOrderStatus(id: string | number, data: UpdateOr
 }
 
 export async function adminCancelOrder(idOrNumber: string | number, data: CancelOrderRequest): Promise<OrderDetailResponse> {
-  return api.post<OrderDetailResponse>(`/api/admin/orders/${idOrNumber}/cancel`, data);
+  const payload = {
+    cancellationReason: data.cancellationReason || data.reason || 'Dibatalkan oleh admin',
+  };
+  return api.post<OrderDetailResponse>(`/api/admin/orders/${idOrNumber}/cancel`, payload);
 }
 
 // ─── Admin Payments ───────────────────────────────────────────────────────────
@@ -93,7 +96,13 @@ export async function adminGetPayments(params?: {
 }
 
 export async function adminVerifyPayment(orderId: string | number, data: VerifyPaymentRequest): Promise<PaymentResponse> {
-  return api.post<PaymentResponse>(`/api/admin/payments/${orderId}/verify`, data);
+  const isApproved = data.approved !== undefined ? data.approved : data.approve;
+  const payload = {
+    approved: isApproved,
+    approve: isApproved,
+    rejectionReason: data.rejectionReason,
+  };
+  return api.post<PaymentResponse>(`/api/admin/payments/${orderId}/verify`, payload);
 }
 
 // ─── Admin Offline Sales ──────────────────────────────────────────────────────
